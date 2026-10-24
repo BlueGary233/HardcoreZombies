@@ -1,0 +1,18 @@
+# 备份与构建产物
+bak/
+42/bak/
+build/
+java/out/
+java/build.jar
+*.class
+*.bak
+*.bak_*
+*.log
+audit_*
+
+# 编辑器
+.vscode/
+.luarc.json
+
+# Java 编译产物（jar 由源码构建）
+42/media/java/*.jar

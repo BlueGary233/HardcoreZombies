@@ -1,0 +1,1006 @@
+-- HZ_Orders.lua — 订单系统
+-- 订单 = HZ._orders[zombie] = { pile=, body=, rec=, t= }
+-- 规则：进入订单表后，第一任务就是干饭。
+--       能打断的只有两种：1) 尸堆没了  2) 丧尸自己没了/死了
+-- 本文件负责：派单、续约、超时回队、释放、幽灵订单清理、热重载善后
+
+local HZ = HardcoreZombies
+
+-- 重载即作废：订单表直接重建，不清理旧对象
+HZ._orders = {}
+
+-- 尸体对某只丧尸的冷却（毫秒）：只是优先级，不是禁令——没有别的选择时会突破
+local function blockMs()     return tonumber(HZ.opt.BlockMs) or 5000 end
+
+-- 订单状态位掩码（HZ_orderState）：bit0=死, bit1=有eatTarget, bit2=有bodyToEat, bit3=尸体在
+local function orderFlags(z, body)
+    local st = 0
+    if HZ_orderState then
+        local ok, v = pcall(HZ_orderState, z, body)
+        if ok and type(v) == "number" then st = v end
+    end
+
+    local dead      = st % 2 >= 1
+    local hasTgt    = math.floor(st / 2) % 2 >= 1 or math.floor(st / 4) % 2 >= 1
+    local bodyAlive = math.floor(st / 8) % 2 >= 1
+    if bodyAlive and body and HZ.isBone(body) then bodyAlive = false end
+    return dead, hasTgt, bodyAlive
+end
+
+-- ===================== buff（唯一状态，写在丧尸 modData 上） =====================
+-- 只有两个字段，Lua 侧不存任何副本：
+--   hz_pile  认领它的堆 pid（0 = 不在任何队列）
+--   hz_buff  1=新生 2=开饭 4=饥饿 8=静音 16=受伤
+-- 判定一律实时读 modData；写只有 joinQueue / leaveQueue 两个口。
+
+function HZ.pileOf(z)
+    if not z then return 0 end
+    if HZ_getPile then
+        local ok, v = pcall(HZ_getPile, z)
+        if ok and type(v) == "number" then return v end
+    end
+    return 0
+end
+
+-- 按当前条件重算并写入。pid 省略时实时读 hz_pile。
+-- pid 是否对应一个活着的堆
+function HZ.pileExists(pid)
+    if not pid or pid == 0 then return false end
+    local list = HZ.piles
+    if not list then return false end
+    for i = 1, #list do
+        if list[i].pid == pid then return true end
+    end
+    return false
+end
+
+function HZ.refreshBuffs(z, pid)
+    if not z then return end
+    if pid == nil then pid = HZ.pileOf(z) end
+
+    -- 认领的堆已经不存在（尸体吃光 / 区块卸载 / 重载后未重建）：
+    -- 就地作废，否则它会带着 QUEUED|MUTE 永久静音、永远不接单
+    if pid ~= 0 and not HZ.pileExists(pid) then
+        pid = 0
+        if HZ_setPile then pcall(HZ_setPile, z, 0) end
+    end
+
+    local s = HZ._zstats and HZ._zstats[z]
+    local B = HZ.BUFF
+    local bits
+
+    if not s then
+        bits = B.NEW
+    elseif pid ~= 0 then
+        bits = B.QUEUED + B.MUTE          -- 开饭顶掉饥饿
+    elseif (s.satiety or 0) < 2 then
+        bits = B.HUNGRY                   -- 饥饿：没有静音
+    else
+        bits = B.MUTE                     -- 吃饱且不在队：静音
+    end
+
+    if s and s.hurt then bits = bits + B.HURT end
+
+    if HZ_setBuff then pcall(HZ_setBuff, z, bits) end
+end
+
+-- 这个堆有多少只（实时扫快照 + hz_pile，不存队列数组）
+function HZ.queueCount(pile)
+    local snap = HZ._snap
+    if not snap or not pile or not pile.pid then return 0 end
+    local n = 0
+    for i = 1, snap.n do
+        local z = snap.obj[i]
+        if z and HZ.pileOf(z) == pile.pid then n = n + 1 end
+    end
+    return n
+end
+
+-- 这个堆的下一只（skip 用来避开当前处理中的那只）
+function HZ.queueNext(pile, skip)
+    local snap = HZ._snap
+    if not snap or not pile or not pile.pid then return nil end
+    for i = 1, snap.n do
+        local z = snap.obj[i]
+        if z and z ~= skip and HZ.pileOf(z) == pile.pid
+           and not (HZ._orders and HZ._orders[z]) then
+            return z
+        end
+    end
+    return nil
+end
+
+-- 进队：写认领，重算 buff
+function HZ.joinQueue(z, pile)
+    if not z or not pile then return end
+    if HZ_setPile then pcall(HZ_setPile, z, pile.pid) end
+    HZ.refreshBuffs(z, pile.pid)
+end
+
+-- 堆消失：把它认领的丧尸全部放回自由。
+-- 由删除堆的那段代码调用（HZ_Pile），不是靠每 4 秒轮询兜底。
+function HZ.releasePileClaims(pile)
+    if not pile or not pile.pid then return end
+    local snap = HZ._snap
+    if not snap then return end
+    for i = 1, snap.n do
+        local z = snap.obj[i]
+        if z and HZ.pileOf(z) == pile.pid then HZ.leaveQueue(z) end
+    end
+end
+
+-- 出队：清认领，重算 buff。所有移除路径的唯一出口。
+function HZ.leaveQueue(z)
+    if not z then return end
+    if HZ_setPile then pcall(HZ_setPile, z, 0) end
+    HZ.refreshBuffs(z, 0)
+end
+
+-- ===================== 释放 =====================
+-- 唯一出口：清进食目标/动画、回补餐位、拉黑这具尸体
+-- requeue=true ：僵尸仍在干饭队列里，只是换一具尸体 → 保留静音
+-- requeue=false：真正结束 → 解除静音，让它能被下一堆吸引
+-- 导航诊断计数：每 30 秒一行，用来判断到底是谁在打断走路
+local function navBump(k)
+    if not HZ.debugEnabled() then return end       -- 诊断代码，Debug 关时零成本
+    local st = HZ._navStat
+    if not st then
+        st = { path = 0, first = 0, body = 0, still = 0, rel = 0 }
+        HZ._navStat = st
+    end
+    st[k] = (st[k] or 0) + 1
+    if HZ.due("navStat", 30000) then
+        HZ.log(string.format("nav30s: path=%d (first=%d body=%d still=%d) release=%d",
+            st.path or 0, st.first or 0, st.body or 0, st.still or 0, st.rel or 0))
+        HZ._navStat = { path = 0, first = 0, body = 0, still = 0, rel = 0 }
+    end
+end
+
+function HZ.releaseOrder(z, ord, requeue)
+    if not z then return end
+    navBump("rel")
+
+    HZ.try("releaseClearTarget", function()
+        HZ.clearEat(z)
+    end)
+
+    -- 退出吃饭：按时长结算饱食度
+    if HZ.statsEatStop then HZ.statsEatStop(z) end
+
+    if ord and ord.rec then
+        ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1)
+        ord.rec.blocked = ord.rec.blocked or {}
+        -- 冷却而不是永久拉黑：30 秒后这具尸体还能重新派给它
+        ord.rec.blocked[z] = getTimestampMs() + blockMs()
+    end
+
+    if HZ._orders then HZ._orders[z] = nil end
+    if ord and ord.pile and ord.pile.orders then ord.pile.orders[z] = nil end
+
+    -- 真正结束才出队；requeue 表示它马上回到队列，保留认领
+    if not requeue then HZ.leaveQueue(z) end
+end
+
+-- 尸堆消失：释放所有指向它的订单
+function HZ.ordersReleasePile(pile)
+    if not pile or not pile.orders then return end
+
+    local list = {}
+    for z, ord in pairs(pile.orders) do
+        list[#list + 1] = { z = z, ord = ord }
+    end
+
+    for i = 1, #list do
+        HZ.releaseOrder(list[i].z, list[i].ord, false)
+    end
+    pile.orders = {}
+end
+
+-- 尸体骨化/消失：释放所有指向这具尸体的订单
+function HZ.ordersReleaseBody(body)
+    if not body or not HZ._orders then return end
+
+    -- 按 uid 比较：骨化后的 IsoDeadBody 可能是另一个实例，引用比较会漏
+    local okU, uid = HZ.try("getUID", function() return body:getUID() end)
+    if not okU or not uid then return end
+
+    local drop = {}
+    for z, ord in pairs(HZ._orders) do
+        if ord.body then
+            local okO, ouid = HZ.try("getUID", function() return ord.body:getUID() end)
+            if okO and ouid == uid then
+                drop[#drop + 1] = { z = z, ord = ord }
+            end
+        end
+    end
+
+    for i = 1, #drop do
+        HZ.releaseOrder(drop[i].z, drop[i].ord, false)
+    end
+end
+
+-- ===================== 导航续期 =====================
+-- ===================== 导航 =====================
+-- Lua 接管寻路：直接走向尸体，到达 1 格内才把 bodyToEat 交给原版开吃。
+-- 原版对 bodyToEat 每帧 pathToLocationF（每次清路径重算），所以派单时刻意不设它。
+-- 导航刷新与声音/派单同频（1 级逻辑间隔，默认 2.1s）；path 本身没有寿命，
+-- 只有偏离/卡住时才需要重发，频率跟着 1 级节拍即可。
+
+local function longBlockMs() return tonumber(HZ.opt.LongBlockMs) or 60000 end   -- 失败的那只多久内不再派给同一具尸体
+
+
+-- 单个订单：导航 / 进食 / 卡住处理（不遍历，供队列调度逐个调用）
+-- 脚下这一格有没有能吃的：在本堆清单里、没骨化
+-- pile.foods 的 uid → rec 索引。foods 变动时重建一次，之后 O(1)。
+-- 没有它的话，脚下扫到 N 具尸体就要各扫一遍 foods（N × 堆尸体数）。
+local function recByUid(pile, uid)
+    local ver = pile._foodsVer or 0
+    if pile._uidVer ~= ver then
+        local m = {}
+        local foods = pile.foods
+        for i = 1, #foods do
+            local r = foods[i]
+            if r.uid then m[r.uid] = r end
+        end
+        pile._foodByUid = m
+        pile._uidVer = ver
+    end
+    return pile._foodByUid[uid]
+end
+
+-- 同一份 foods 的成员集合（派单时判断订单指向的 rec 是否还在）
+local function foodSet(pile)
+    local ver = pile._foodsVer or 0
+    if pile._setVer ~= ver then
+        local m = {}
+        local foods = pile.foods
+        for i = 1, #foods do m[foods[i]] = true end
+        pile._foodSet = m
+        pile._setVer = ver
+    end
+    return pile._foodSet
+end
+
+local function footBodyAt(z, pile)
+    local body, rec = nil, nil
+    HZ.try("footBody", function()
+        local sq = z:getSquare()
+        if not sq then return end
+        local list = sq:getDeadBodys()
+        if not list then return end
+        for i = 0, list:size() - 1 do
+            local b = list:get(i)
+            if b then
+                -- 先取 uid 查索引，命中才去查骨架（少两次跨桥）
+                local uid = b:getUID()
+                local r = uid and recByUid(pile, uid)
+                if r and not HZ.isBone(b) then
+                    body, rec = b, r
+                    return                      -- 第一具可以吃的就停
+                end
+            end
+        end
+    end)
+    return body, rec
+end
+
+-- 本堆里换一具：跳过骨化、跳过自己刚吃过的冷却
+local function otherRecInPile(pile, z, curRec)
+    local nowMs = getTimestampMs()
+    for i = 1, #pile.foods do
+        local rec = pile.foods[i]
+        if rec ~= curRec then
+            local untilMs = rec.blocked and rec.blocked[z]
+            if ((not untilMs) or nowMs >= untilMs)
+               and (rec.orders or 0) < (HZ.opt.MaxEaters or 4) then
+                local b = HZ.findBody and HZ.findBody(rec) or nil
+                if b and not HZ.isBone(b) then return b, rec end
+            end
+        end
+    end
+    return nil, nil
+end
+
+-- 订单主循环：校验目标 → 换目标 → 吃饭 → 导航（每只每次一拍）
+function HZ.navOne(z, ord, now)
+    local pile = ord.pile
+    if not pile then
+        -- 脏订单（堆已被丢弃）：直接摘掉，别让它在 tickOneOrder 里反复报错
+        if z and HZ._orders then HZ._orders[z] = nil end
+        return
+    end
+    local body = ord.body
+    local zDead, hasTgt, bodyAlive = false, false, false
+
+    if (not z) or pile.dead then
+        zDead = true
+    else
+        -- 一次 bridge 拿：丧尸死了 / hasEatTarget / bodyToEat / body.getSquare()
+        zDead, hasTgt, bodyAlive = orderFlags(z, body)
+        -- isBone 已在 orderFlags 内检查
+    end
+
+    -- 目标没了（nil / 骨化 / 被删）和丧尸自己死了是两件事：
+    -- 前者换目标继续吃，后者才释放
+    local bodyGone = (not zDead) and ((not body) or (not bodyAlive))
+
+    if body and (not zDead) and (not bodyGone) and ord.faceNext then
+        -- 设目标的下一次维护里转一次，之后不再改（避免每拍覆盖它自己的朝向）
+        HZ.try("faceOnce", function() z:faceLocationF(body:getX(), body:getY()) end)
+        ord.faceNext = false
+    end
+
+    if bodyGone and z then
+        -- ① 先扫脚下这一格
+        local nb, nrec = footBodyAt(z, pile)
+        -- ② 脚下没有就换本堆的其他尸体
+        if not nb then nb, nrec = otherRecInPile(pile, z, ord.rec) end
+
+        if nb and nrec then
+            if ord.rec then ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1) end
+            nrec.orders = (nrec.orders or 0) + 1
+
+            -- 换目标前结算已经吃的时长
+            if ord.eating and HZ.statsEatStop then HZ.statsEatStop(z) end
+
+            ord.body, ord.rec = nb, nrec
+            ord.bestD, ord.lastX, ord.lastY = nil, nil, nil
+            ord.navBody, ord.stuckAt, ord.eating = nil, now, false
+
+            HZ.try("retargetClear", function() HZ.clearEat(z) end)
+            if HZ.debugEnabled() then
+                HZ.log(string.format("retarget uid=%s -> rec=(%s,%s)",
+                    tostring(ord.uid), tostring(nrec.x), tostring(nrec.y)))
+            end
+            return
+        end
+        -- ③ 本堆没得吃了：释放回队列（有尸体才回队，没尸体就放自由）
+        if HZ.debugEnabled() then
+            HZ.log(string.format("no-target uid=%s pile=(%d,%d) foods=%d",
+                tostring(ord.uid), pile.x, pile.y, #pile.foods))
+        end
+        local p = ord.pile
+        HZ.releaseOrder(z, ord, false)
+        if p and not p.dead and #p.foods > 0
+           and not HZ._orders[z] and HZ.pileOf(z) == 0 then
+            HZ.joinQueue(z, p)
+        end
+        return
+    end
+
+    if zDead then
+        -- 不碰 z（可能已销毁）：只用 uid 和尸体坐标
+        if HZ.debugEnabled() then
+            HZ.log(string.format("order dead uid=%s rec=(%s,%s) bodyAlive=%s pileDead=%s",
+                tostring(ord.uid),
+                tostring(ord.rec and ord.rec.x), tostring(ord.rec and ord.rec.y),
+                tostring(bodyAlive), tostring(pile.dead)))
+        end
+        local p = ord.pile
+        HZ.releaseOrder(z, ord, false)
+
+        if p and not p.dead and not HZ._orders[z] and HZ.pileOf(z) == 0 then
+            HZ.joinQueue(z, p)
+        end
+    else
+        local okD, d = HZ.try("bodyDist", function() return z:DistTo(body) end)
+
+        -- 到达判定写死 1 格；滑杆只允许调小，不能超过 1
+        local eatD  = math.min(1.0, tonumber(HZ.opt.EatDistance) or 1.0)
+        local keepD = eatD + 0.2          -- 只留 0.2 格迟滞，防止边界抖动
+        local near  = okD and d and (ord.eating and d <= keepD or d <= eatD)
+
+        -- 爬行不站起：爬到 1 格内直接趴着吃，订单释放时才恢复站立
+        if near then
+            -- 吃满 5 点：主动离开（不然会一直吃到尸体骨化）
+            if HZ.statsSatiated and HZ.statsSatiated(z) then
+                HZ.releaseOrder(z, ord, false)
+                return
+            end
+
+            ord.stuckAt = now
+            ord.bestD = d
+
+            -- 只在「确实还没挂上」且距上次尝试超过 8 秒时才重设。
+            -- 引擎在进入进食状态后可能把 eatBodyTarget 读成 null，
+            -- 每拍重设会把状态机反复推回 idle，看起来一直在抽。
+            local retryAt = ord.arriveAt
+            if (not hasTgt) and (not retryAt or (now - retryAt) > 8000) then
+                HZ.try("arrive", function()
+                    z:setDefaultState()
+                    z:setEatBodyTarget(body, true)   -- force：绕 3 人上限
+                    z:setForceEatingAnimation(true)
+                end)
+                ord.arriveAt = now
+                -- 记录吃饭起点，退出时按时长结算饱食度
+                if HZ.statsEatStart then HZ.statsEatStart(z) end
+                ord.faceNext = true      -- 下一次维护再转一次，之后不再改
+            end
+            ord.eating = true
+        else
+            if ord.eating then
+                HZ.try("leaveTable", function()
+                    HZ.clearEat(z)
+                end)
+                -- 退出吃饭：按时长结算饱食度
+                if HZ.statsEatStop then HZ.statsEatStop(z) end
+                ord.eating = false
+            end
+
+            if ord.stuckAt and (now - ord.stuckAt) > HZ.emitIntervalMs() * 6 then
+                -- 卡住了先看脚下：脚下有尸体就改吃它，别浪费这张单
+                local foot, footRec = footBodyAt(z, pile)
+
+                if foot and footRec then
+                    -- 目标改成脚下的尸体（订单额度从旧尸转移到新尸）
+                    if ord.rec then
+                        ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1)
+                    end
+                    footRec.orders = (footRec.orders or 0) + 1
+
+                    -- 换目标前先结算已吃的时长，否则走路时间被算成进食
+                    if ord.eating and HZ.statsEatStop then HZ.statsEatStop(z) end
+
+                    ord.body  = foot
+                    ord.rec   = footRec
+                    ord.bestD = nil
+                    ord.lastX, ord.lastY = nil, nil   -- 强制下一次维护发新 path
+                    ord.stuckAt = now
+                    ord.eating = false
+
+                    HZ.try("retarget", function()
+                        HZ.clearEat(z)
+                    end)
+                else
+                    -- 脚下没尸体：释放回队，换下一只。
+                    -- 释放后这只对当前尸体长冷却（60 秒），避免它立刻又被派回同一具。
+                    HZ.releaseOrder(z, ord, true)
+                    if ord.rec then
+                        ord.rec.blocked = ord.rec.blocked or {}
+                        ord.rec.blocked[z] = now + longBlockMs()
+                    end
+                    HZ.joinQueue(z, pile)
+                end
+            else
+                -- 导航：只在「第一次 / 目标换了 / 连续两个间隔没位移」时发 path。
+                -- 正常走路时目标没变 → 不重发，避免每 2 秒重算一次 A*。
+                local x, y = nil, nil
+                HZ.try("getX", function() x, y = z:getX(), z:getY() end)
+
+                local firstNav   = (ord.lastX == nil)
+                local bodyChanged = (ord.navBody ~= body)
+                if bodyChanged then ord.navBody = body end
+
+                local moved = true
+                if x and ord.lastX then
+                    moved = (math.abs(x - ord.lastX) + math.abs(y - ord.lastY)) > 0.2
+                end
+
+                -- 慢速/爬行不误判：连续两次没动才算卡住
+                if moved then
+                    ord.still = 0
+                    ord.stuckAt = now        -- 在动就不算卡住
+                else
+                    ord.still = (ord.still or 0) + 1
+                end
+
+                -- 靠近目标还停着 = 在等餐位，重发 path 只会把现有路径清掉，越等越顿
+                local waiting = (d and d <= keepD + 1.5)
+
+                local needNav = firstNav or bodyChanged
+                    or ((ord.still or 0) >= 4 and not waiting)
+
+                if needNav and (now - (ord.navAt or 0)) > HZ.emitIntervalMs() then
+                    navBump("path")
+                    navBump(firstNav and "first" or (bodyChanged and "body" or "still"))
+
+                    HZ.try("nav", function()
+                        z:pathToLocationF(body:getX(), body:getY(), body:getZ())
+                    end)
+                    ord.navAt = now
+                    ord.still = 0
+                end
+
+                -- 距离长期不改善 -> 记为卡住
+                if d then
+                    if ord.bestD == nil or d < ord.bestD - 0.2 then
+                        ord.bestD = d
+                        ord.stuckAt = now
+                    elseif not ord.stuckAt then
+                        ord.stuckAt = now
+                    end
+                end
+
+                if x then
+                    ord.lastX, ord.lastY = x, y
+                end
+            end
+        end
+    end
+end
+
+-- 每堆兜底：订单指向的尸体没了 / 丧尸没了就释放
+function HZ.ordersSweepPile(pile)
+    if not pile or not pile.orders then return end
+
+    local nowMs = getTimestampMs()
+    local drop = nil
+
+    local inFoods = {}
+    for i = 1, #pile.foods do inFoods[pile.foods[i]] = true end
+
+    for z, ord in pairs(pile.orders) do
+        local dead = false
+
+        if not z then
+            dead = true
+        elseif not ord.rec or not inFoods[ord.rec] then
+            -- 订单指向的 rec 已经不在本堆（重建/重扫）：旧订单必须释放
+            dead = true
+        else
+            -- 导航和进食交给 tickOneOrder（全局订单队列）；这里只做失效释放
+            -- orderFlags 走 Java 桥，失效对象返回 dead=true，不抛
+            local isDeadFlag, _, bodyAlive = orderFlags(z, ord.body)
+
+            if isDeadFlag or not bodyAlive then
+                -- 丧尸已死/已卸载，或目标尸体没了：释放
+                dead = true
+            end
+            -- 活着什么都不用做：ord.t 是派单时刻，踢人排序要用，别每拍刷新
+        end
+
+        if dead then
+            drop = drop or {}
+            drop[#drop + 1] = { z = z, ord = ord }
+        end
+    end
+
+    if drop then
+        for i = 1, #drop do
+            HZ.releaseOrder(drop[i].z, drop[i].ord, false)
+        end
+    end
+end
+
+
+-- ===================== 队列补充（快照周期，4 秒） =====================
+-- 派单区：声源圆（圆心 = 本次发声的声源中心，半径 = 本次声音半径）
+-- 风偏已把声源限制在「半径 - 2×尸堆边长」以内，所以这个圆必然覆盖整个尸堆。
+-- 没气味（尸体还没腐化）时不发声，派单区退回尸堆本身（方块）。
+local function assignCircle(pile)
+    local sx = pile.sourceX or pile.x
+    local sy = pile.sourceY or pile.y
+    local R  = tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 20
+    return sx, sy, R
+end
+
+-- 对象已失效（死亡 / 卸载 / 对象被回收）：清掉所有痕迹并返回 true。
+-- HZ_orderState 对失效对象返回 0，桥调用本身 pcall 保护，不会抛。
+local function purgeIfGone(z)
+    if not z then return true end
+    if not HZ_orderState then return false end
+
+    -- 用 orderFlags 而不是裸调 HZ_orderState：
+    -- 它内部 pcall，桥调用失败时 st 保持 0 → 当成"活着"，不会误杀。
+    -- 注意 bit0 是「已死」，正常游荡丧尸返回 0（活）。
+    local dead = orderFlags(z, nil)
+
+    if not HZ._orderStateProbed and HZ.debugEnabled() then
+        HZ._orderStateProbed = true
+        local ok, v = pcall(HZ_orderState, z, nil)
+        HZ.log(string.format("orderState probe: ok=%s v=%s type=%s",
+            tostring(ok), tostring(v), type(v)))
+    end
+
+    if not dead then return false end
+
+    if HZ.leaveQueue then HZ.leaveQueue(z) end
+    if HZ._zstats then HZ._zstats[z] = nil end
+    return true
+end
+
+-- 单只丧尸：续单 / 释放 / 进队。室内和室外共用这一段
+local function considerZombie(pile, mo, nowMs, queueCap, cnt)
+    if purgeIfGone(mo) then return "gone" end
+
+    local full = (HZ.statsFull and HZ.statsFull(mo)) or false
+    local ord0 = HZ._orders[mo]
+
+    -- 目标尸体被删除后引擎不清 eatBodyTarget
+    local stale = false
+    if not ord0 then
+        HZ.try("staleTarget", function()
+            local tgt = mo:getEatBodyTarget()
+            if tgt and instanceof(tgt, "IsoDeadBody") then
+                if not tgt:getSquare() then stale = true end
+            end
+        end)
+    end
+
+    if stale then
+        local so = HZ._orders[mo]
+        if so then
+            HZ.releaseOrder(mo, so, false)
+        else
+            -- 只清引擎里的残留 eatBodyTarget，不动静音：
+            -- 它可能正躺在某个堆的队列里，清掉静音位会让它重新听见
+            -- 所有堆的声音，被另一堆拉走 —— 这就是"反复拉动"的来源。
+            HZ.try("clearStaleEat", function() HZ.clearEat(mo) end)
+        end
+    end
+
+    local ord = HZ._orders[mo]
+
+    -- 吃饱了：释放、不入队、不接单
+    if full then
+        if ord then
+            HZ.releaseOrder(mo, ord, false)      -- 会 clearEat
+        else
+            -- 没有订单但引擎里还挂着进食目标（被别人先踢出队的情况）：
+            -- 不清的话它会一直保持啃咬动画和状态，看着像"5.0 还在吃"
+            HZ.try("fullClearEat", function() HZ.clearEat(mo) end)
+        end
+        HZ.refreshBuffs(mo)
+        return "full"
+    end
+
+    -- 已有订单：只检查目标，导航交给 tickOneOrder
+    if ord then
+        local isDeadFlag, _, bodyAlive = orderFlags(mo, ord.body)
+        if isDeadFlag then
+            HZ.releaseOrder(mo, ord, false)
+        elseif not bodyAlive then
+            HZ.releaseOrder(mo, ord, true)   -- requeue：保留静音
+            if HZ.pileOf(mo) == 0 and cnt.n < queueCap then
+                HZ.joinQueue(mo, pile)
+                cnt.n = cnt.n + 1
+            end
+        end
+        return "ord"
+    end
+
+    -- 空闲：进队（限容量）。
+    -- 已被别的堆认领（开饭 + 静音 buff）就不入本堆 ——
+    -- 这是"一只丧尸只跟一个堆走、不被两个堆反复拉动"的硬条件。
+    local pid = HZ.pileOf(mo)
+
+    -- 认领的堆不存在（旧存档 / 重载残留 / 尸体已吃完）：作废重来。
+    -- 不校验的话，丧尸会顶着上一局的 pid 被所有新堆拒绝，
+    -- 永远进不了队、永远接不到单（refill 里会看到 owner=N、q=0）
+    if pid ~= 0 and not HZ.pileExists(pid) then
+        HZ.leaveQueue(mo)
+        pid = 0
+    end
+
+    if pid ~= 0 and pid ~= pile.pid then return "owner" end
+
+    if pid == 0 and cnt.n < queueCap then
+        HZ.joinQueue(mo, pile)
+        cnt.n = cnt.n + 1
+        return "ok"
+    end
+    return "cap"
+end
+
+-- 室内：边界是墙，扫房间格（室内无风，不用圆）
+local function refillFromRoom(pile, nowMs, queueCap, cnt)
+    local cell = getCell()
+    if not cell or not pile.room then return end
+
+    local list = pile.room:getSquares()
+    if not list then return end
+
+    for i = 0, list:size() - 1 do
+        local sq = list:get(i)
+        local mos = sq and sq:getMovingObjects()
+        if mos then
+            for j = 0, mos:size() - 1 do
+                local mo = mos:get(j)
+                if mo and instanceof(mo, "IsoZombie") then
+                    local okD, dead = HZ.try("roomIsDead", function() return mo:isDead() end)
+                    if okD and not dead then
+                        considerZombie(pile, mo, nowMs, queueCap, cnt)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- 室外：快照坐标做一次圆判断，命中才碰对象
+function HZ.refillQueue(pile)
+    if not pile then return 0 end
+
+    local maxEaters = math.floor(HZ.opt.MaxEaters or 4)
+    local cellCount = (HZ.pileCellCount and HZ.pileCellCount(pile)) or 1
+    local pileCap   = maxEaters * math.max(1, cellCount)
+    local queueCap  = math.ceil(pileCap * 1.1)
+
+    -- 餐位满：这个堆不再拉人（发声那边也已经有同样的闸）。
+    -- 否则会把丧尸认领到一张坐满的桌子前，静音站着，而别的还有空位的堆
+    -- 又发声音拉它 —— 来回跑的根源。
+    local pileOrders = 0
+    for i = 1, #pile.foods do
+        pileOrders = pileOrders + (pile.foods[i].orders or 0)
+    end
+    if pileOrders >= pileCap then
+        if HZ.debugEnabled() then
+            HZ.log(string.format("refill (%.0f,%.0f) SKIP full orders=%d/%d",
+                pile.x, pile.y, pileOrders, pileCap))
+        end
+        return 0
+    end
+
+    HZ._orders = HZ._orders or {}
+
+    -- 容量下降（尸体骨化）：超出上限的排队者踢回自由
+    -- 队列长度只算一次，后面进队时在 cnt 上累加，避免每只丧尸扫全快照
+    local cnt = { n = HZ.queueCount(pile) }
+    while cnt.n > queueCap do
+        local zz = HZ.queueNext(pile)
+        if not zz then break end
+        HZ.leaveQueue(zz)
+        cnt.n = cnt.n - 1
+    end
+
+    local nowMs = getTimestampMs()
+
+    if pile.indoor then
+        refillFromRoom(pile, nowMs, queueCap, cnt)
+        return cnt.n
+    end
+
+    local snap = HZ._snap
+    if not snap or (snap.n or 0) <= 0 then return 0 end
+
+    -- 没气味（尸体还没到腐化时间）：只收尸堆本身，不扩散
+    if not pile.hasScent then
+        local pileR = math.floor(tonumber(HZ.opt.PileSize) or 2)
+        for i = 1, snap.n do
+            local mo = snap.obj[i]
+            if mo then
+                local dx, dy = snap.x[i] - pile.x, snap.y[i] - pile.y
+                if math.abs(dx) <= pileR and math.abs(dy) <= pileR then
+                    considerZombie(pile, mo, nowMs, queueCap, cnt)
+                end
+            end
+        end
+        return cnt.n
+    end
+
+    -- 有气味：声源圆（风偏已保证覆盖整个尸堆）
+    local mx, my, R = assignCircle(pile)
+    local R2 = R * R
+
+    local seen, inCircle = 0, 0
+    local why = {}
+    for i = 1, snap.n do
+        local mo = snap.obj[i]
+        if mo then
+            seen = seen + 1
+            local dx, dy = snap.x[i] - mx, snap.y[i] - my
+            if dx * dx + dy * dy <= R2 then
+                inCircle = inCircle + 1
+                local r = considerZombie(pile, mo, nowMs, queueCap, cnt) or "?"
+                why[r] = (why[r] or 0) + 1
+            end
+        end
+    end
+
+    if HZ.debugEnabled() then
+        HZ.log(string.format("refill (%.0f,%.0f) src=(%.0f,%.0f) R=%d in=%d q=%d | ok=%d owner=%d ord=%d full=%d gone=%d cap=%d",
+            pile.x, pile.y, mx, my, R, inCircle, cnt.n,
+            why.ok or 0, why.owner or 0, why.ord or 0, why.full or 0, why.gone or 0, why.cap or 0))
+    end
+
+    return cnt.n
+end
+
+-- ===================== 派单（全局队列：2s / 排队数） =====================
+
+-- 给一只丧尸派单；成功返回 true
+function HZ.dispatchOne(pile, mo, nowMs, passLimit)
+    if not pile or not mo then return false end
+
+    HZ._orders = HZ._orders or {}
+
+    -- 对象已死/卸载：出队
+    if purgeIfGone(mo) then
+        HZ.leaveQueue(mo)
+        return false
+    end
+
+    -- 已经被别的堆抢了：认领跟着订单走（静音不能断）
+    if HZ._orders[mo] then
+        local ord = HZ._orders[mo]
+        if ord.pile and ord.pile.pid then
+            if HZ_setPile then pcall(HZ_setPile, mo, ord.pile.pid) end
+        end
+        HZ.refreshBuffs(mo)
+        return false
+    end
+
+    if HZ.statsTrack then pcall(HZ.statsTrack, mo) end
+
+    if HZ.statsFull and HZ.statsFull(mo) then
+        if HZ.debugEnabled() and HZ.due("dbgFull", 3000) then
+            HZ.log(string.format("disp-skip full pile=(%d,%d) uid=%s", pile.x, pile.y, HZ.uidOf(mo) or "?"))
+        end
+        -- 出队的同时清引擎进食目标，否则它带着啃咬动画站在尸体上
+        HZ.try("dispFullClearEat", function() HZ.clearEat(mo) end)
+        HZ.leaveQueue(mo)
+        return false
+    end
+
+    local maxEaters = math.floor(HZ.opt.MaxEaters or 4)
+    local limit = passLimit or maxEaters
+
+    -- 每格已有订单数：只遍历订单，不碰尸体（成员集合按版本缓存）
+    local inFoods = foodSet(pile)
+    local cellOrders = {}
+    for _, ord in pairs(pile.orders or {}) do
+        local r = ord.rec
+        if r and inFoods[r] then
+            local c = (r.x or 0) .. ":" .. (r.y or 0)
+            cellOrders[c] = (cellOrders[c] or 0) + 1
+        end
+    end
+
+    -- 由内向外找：命中第一具能派的尸体就停。
+    -- 原来会为每具尸体都调一次 findBody（扫格子），一具一具扫完才挑；
+    -- 现在只有「格子没满、没在冷却」的候选才会去扫它的格子。
+    local pick, pickCk = nil, nil
+    local maxRing = (math.floor(tonumber(HZ.opt.PileSize) or 2)) + 3
+
+    for ring = 0, maxRing do
+        for i = 1, #pile.foods do
+            local rec = pile.foods[i]
+            local dx = math.abs((rec.x or 0) - pile.x)
+            local dy = math.abs((rec.y or 0) - pile.y)
+            if math.max(dx, dy) == ring then
+                local c = (rec.x or 0) .. ":" .. (rec.y or 0)
+                if (cellOrders[c] or 0) < limit then
+                    local untilMs = rec.blocked and rec.blocked[mo]
+                    if (not untilMs) or nowMs >= untilMs then
+                        local b = HZ.findBody and HZ.findBody(rec) or nil
+                        if b and not HZ.isBone(b) then
+                            pick, pickCk = { rec = rec, body = b }, c
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        if pick then break end
+    end
+
+    if not pick then
+        if HZ.debugEnabled() and HZ.due("dbgNoPick", 3000) then
+            local ordN = 0
+            for _ in pairs(pile.orders or {}) do ordN = ordN + 1 end
+            HZ.log(string.format("disp-skip no-pick pile=(%d,%d) foods=%d pileOrders=%d limit=%d",
+                pile.x, pile.y, #pile.foods, ordN, limit))
+        end
+        return false                          -- 没尸体 / 满格 / 冷却：留在队里
+    end
+
+    local rec, body = pick.rec, pick.body
+    local ck = pickCk
+
+    if rec.blocked then rec.blocked[mo] = nil end
+
+    HZ.try("forceIdle", function() mo:setDefaultState() end)
+    if HZ_clearTarget then pcall(HZ_clearTarget, mo) end
+    -- 注意：不 unmark。派单后它仍在"认领"状态（只是从排队数组挪到订单），
+    -- 否则去吃饭的路上会重新听见别的堆的声音，被拉走。
+    HZ.refreshBuffs(mo)
+
+    local ord = {
+        pile = pile,
+        body = body,
+        rec  = rec,
+        t    = nowMs,
+        uid  = HZ.uidOf(mo) or "?",   -- 失效对象返回 nil
+    }
+    HZ._orders[mo] = ord
+    pile.orders = pile.orders or {}
+    pile.orders[mo] = ord
+
+    rec.orders = (rec.orders or 0) + 1
+    cellOrders[ck] = (cellOrders[ck] or 0) + 1
+    pile.lastAssign = (pile.lastAssign or 0) + 1
+
+    if HZ.debugEnabled() then
+        HZ.log(string.format("assign uid=%s -> rec=(%d,%d) cell=%d/%d",
+            ord.uid, rec.x, rec.y, cellOrders[ck], limit))
+    end
+    return true
+end
+
+-- ===================== 全局队列：2s / 队列长度 =====================
+-- 派单和续单都不绑堆：队列里是所有堆的元素，间隔 = 周期 / 总数。
+-- 堆内 while 一次派完会让同堆的多只丧尸同帧起步，这是同步感的来源。
+
+-- 派单队列：所有堆的排队丧尸合成一个全局队列
+function HZ.tickOneDispatch()
+    local piles = HZ.piles
+    if not piles or #piles == 0 then return end
+
+    local now = getTimestampMs()
+    local emitMs = HZ.emitIntervalMs()
+
+    -- 每 2 秒重建一次索引。队列 = 扫快照 + hz_pile 分桶（p.queue 已删除）
+    if not HZ._dispKeys or (now - (HZ._dispKeysAt or 0)) > emitMs then
+        local keys = {}
+        local snap = HZ._snap
+        if snap then
+            local byPid = {}
+            for k = 1, snap.n do
+                local z = snap.obj[k]
+                -- 已有订单的不进派单队列（它们在 tickOneOrder 里续单）
+                if z and not (HZ._orders and HZ._orders[z]) then
+                    local pid = HZ.pileOf(z)
+                    if pid ~= 0 then
+                        local b = byPid[pid]
+                        if not b then b = {}; byPid[pid] = b end
+                        b[#b + 1] = z
+                    end
+                end
+            end
+            for i = 1, #piles do
+                local p = piles[i]
+                local b = p.pid and byPid[p.pid]
+                if b then
+                    for j = 1, #b do keys[#keys + 1] = { pile = p, mo = b[j] } end
+                end
+            end
+        end
+        HZ._dispKeys = keys
+        HZ._dispKeysAt = now
+    end
+
+    local keys = HZ._dispKeys
+    local n = #keys
+
+    if HZ.debugEnabled() and HZ.due("dbgDispTick", 5000) then
+        HZ.log(string.format("disp tick: piles=%d keys=%d cursor=%d due=%.1fms",
+            #piles, n, HZ._dispCursor or 0, n > 0 and (emitMs / n) or 0))
+    end
+
+    if n == 0 then return end
+
+    if not HZ.due("disp", emitMs / n) then return end
+
+    HZ._dispCursor = ((HZ._dispCursor or 0) % n) + 1
+    local e = keys[HZ._dispCursor]
+    if e and e.pile and e.mo then
+        HZ.dispatchOne(e.pile, e.mo, now, nil)
+    end
+end
+
+-- 续单队列：所有订单合成一个全局队列
+function HZ.tickOneOrder()
+    local t = HZ._orders
+    if not t then return end
+
+    local now = getTimestampMs()
+    local emitMs = HZ.emitIntervalMs()
+
+    if not HZ._ordKeys or (now - (HZ._ordKeysAt or 0)) > emitMs then
+        local keys = {}
+        for z in pairs(t) do keys[#keys + 1] = z end
+        HZ._ordKeys = keys
+        HZ._ordKeysAt = now
+    end
+
+    local keys = HZ._ordKeys
+    local n = #keys
+    if n == 0 then return end
+
+    if not HZ.due("ord", emitMs / n) then return end
+
+    HZ._ordCursor = ((HZ._ordCursor or 0) % n) + 1
+    local z = keys[HZ._ordCursor]
+    local ord = z and t[z]
+    if ord then HZ.navOne(z, ord, now) end
+end

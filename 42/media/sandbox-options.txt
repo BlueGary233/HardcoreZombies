@@ -1,0 +1,34 @@
+VERSION = 1,
+
+option HardcoreZombies.SatInit
+{type = double, min = 0.0, max = 5.0, default = 3.0, page = HardcoreZombies, translation = HardcoreZombies_SatInit,}
+
+option HardcoreZombies.SatPeak
+{type = double, min = 0.0, max = 5.0, default = 4.0, page = HardcoreZombies, translation = HardcoreZombies_SatPeak,}
+
+option HardcoreZombies.SatMin
+{type = double, min = 0.0, max = 5.0, default = 1.0, page = HardcoreZombies, translation = HardcoreZombies_SatMin,}
+
+option HardcoreZombies.SatPeakDay
+{type = integer, min = 0, max = 365, default = 90, page = HardcoreZombies, translation = HardcoreZombies_SatPeakDay,}
+
+option HardcoreZombies.SatZeroDay
+{type = integer, min = 1, max = 720, default = 180, page = HardcoreZombies, translation = HardcoreZombies_SatZeroDay,}
+
+option HardcoreZombies.NutInit
+{type = double, min = 0.0, max = 200.0, default = 100.0, page = HardcoreZombies, translation = HardcoreZombies_NutInit,}
+
+option HardcoreZombies.NutPeak
+{type = double, min = 0.0, max = 200.0, default = 200.0, page = HardcoreZombies, translation = HardcoreZombies_NutPeak,}
+
+option HardcoreZombies.NutMin
+{type = double, min = 0.0, max = 200.0, default = 10.0, page = HardcoreZombies, translation = HardcoreZombies_NutMin,}
+
+option HardcoreZombies.NutPeakDay
+{type = integer, min = 0, max = 365, default = 90, page = HardcoreZombies, translation = HardcoreZombies_NutPeakDay,}
+
+option HardcoreZombies.NutZeroDay
+{type = integer, min = 1, max = 720, default = 360, page = HardcoreZombies, translation = HardcoreZombies_NutZeroDay,}
+
+option HardcoreZombies.CurveExp
+{type = double, min = 0.0, max = 4.0, default = 2.0, page = HardcoreZombies, translation = HardcoreZombies_CurveExp,}
