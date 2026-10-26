@@ -1545,12 +1545,15 @@ local function eatTick(z, ord, now)
         -- 引擎就是不接这个进食目标：记下来，连续失败 → 换尸体/换格。
         -- 没有这一段的话，eatTick 会一秒一次永远重发，丧尸站在尸体上不吃也不换。
         ord.eatFails = (ord.eatFails or 0) + 1
-        if ord.eatFails == 1 or ord.eatFails == 6 then
-            local back, si = nil, -999
+        if ord.eatFails == 1 then
+            local back = nil
             HZ.try("eatBack", function() back = z:getEatBodyTarget() end)
-            HZ.try("eatSI", function() si = ord.body:getStaticMovingObjectIndex() end)
-            HZ.log(string.format("eat reject uid=%s d=%.2f back=%s si=%s fails=%d",
-                tostring(ord.uid), d or -1, tostring(back), tostring(si), ord.eatFails))
+            if back == nil then
+                local px, py, bx, by = -1, -1, -1, -1
+                HZ.try("eatPos", function() px, py = z:getX(), z:getY(); bx, by = ord.body:getX(), ord.body:getY() end)
+                HZ.log(string.format("eat reject uid=%s z=(%.1f,%.1f) body=(%.1f,%.1f) fails=%d",
+                    tostring(ord.uid), px, py, bx, by, ord.eatFails))
+            end
         end
         if ord.eatFails >= 6 then
             ord.eatFails = 0
@@ -1666,6 +1669,14 @@ function HZ.tickOrder(z, ord, now)
     -- ② 距离
     local okD, d = HZ.try("tickDist", function() return z:DistTo(ord.body) end)
     if not okD or not d then d = 1e9 end
+
+    -- 远单观测：d 特别大的订单，10 秒一条，确认是在接近还是在远离
+    if d and d > 15 and HZ.due("farOrd" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
+        local px, py, bx, by = -1, -1, -1, -1
+        HZ.try("farPos", function() px, py = z:getX(), z:getY(); bx, by = ord.body:getX(), ord.body:getY() end)
+        HZ.log(string.format("far order uid=%s d=%.1f z=(%.1f,%.1f) body=(%.1f,%.1f)",
+            tostring(ord.uid), d, px, py, bx, by))
+    end
 
     -- ③ 位移
     local x, y
