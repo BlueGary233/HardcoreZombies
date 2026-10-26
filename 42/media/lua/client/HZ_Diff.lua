@@ -1,8 +1,10 @@
 -- HZ_Diff.lua — 引擎实时快照（替代 diff + 队列）
 --
--- 拍子：
---   声音 / 续单 / 发单      EmitInterval（默认 2s，每堆轮一次）
---   全量快照                EmitInterval × SnapPerPile（默认 4s，全局一次）
+-- 拍子（三个独立队列，各自 due(2000 / 队列长度)）：
+--   尸堆维护 / 发声        tickPiles
+--   派单                  tickOneDispatch
+--   续单 / 进食           tickOneOrder
+--   全量快照              EmitInterval × SnapPerPile（默认 4s，全局一次）
 --
 -- HZ_zombieFrame 返回：
 --   obj[1..n] x[1..n] y[1..n] stats[1..n] n     ← 按 getObjectList 顺序，ArrayList 保序

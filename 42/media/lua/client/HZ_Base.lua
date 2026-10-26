@@ -5,6 +5,8 @@ HardcoreZombies = HardcoreZombies or {}
 
 local HZ = HardcoreZombies
 
+HZ.VERSION = "0.4.0"
+
 -- 重载后重新读取调试开关
 
 -- 受控调用：失败不崩，但按方法名累计，快照可见
@@ -263,4 +265,4 @@ function HZ.due(key, intervalMs)
     return true
 end
 
-print("[HZ_Base] loaded")
+print("[HZ] v" .. HZ.VERSION .. " core loaded")

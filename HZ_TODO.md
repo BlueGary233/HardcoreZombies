@@ -102,6 +102,21 @@ tickList = diffTick, tickStatsStep, tickPiles, tickOneDispatch, tickOneOrder
 
 ## TODO（0.4 方向）
 
+### 0. 跑尸不会回退（P0，已确认）
+
+**现象**：营养 ≥ 4.5 调用 `HZ_applySprint` → Java 侧 `z.doSprinter()`；之后营养掉回 4.5 以下，没有任何代码把它降回来，**这只丧尸会一直跑下去**。
+
+**原因**：`doSprinter()` 是单向升级，写了 `speedType/walkType/speedMod/动画帧率`；全项目没有对应的 `doShambler` 调用，也没有保存升级前的类型。
+
+**修法（引擎自带对称接口）**：
+
+1. 升级前把原类型记下来：`modData.hz_spd = z.speedType`（0/1/2/3），随丧尸存档，读档后仍在
+2. 降级时按原值选引擎方法：`1 → doSprinter()`、`2 → doFastShambler()`、`3 → doShambler()`
+3. 加滞回，避免在阈值上抖动：`≥4.5` 升级、`<4.2` 降级，中间保持不变
+4. 只在跨阈值时调用一次，不要每帧写
+
+**验证**：Debug 打开，饿一只跑尸到 4.0 以下，日志里应看到 `sp` 从 1 回到 2/3，移动速度肉眼变慢。
+
 ### 1. 更多气味源
 
 先把 `HZ_Sound` 改成统一的 **source registry**，每个源带：

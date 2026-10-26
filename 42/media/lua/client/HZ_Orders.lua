@@ -344,8 +344,8 @@ function HZ.navOne(z, ord, now)
             if ord.eating and HZ.statsEatStop then HZ.statsEatStop(z) end
 
             ord.body, ord.rec = nb, nrec
-            ord.bestD, ord.lastX, ord.lastY = nil, nil, nil
-            ord.navBody, ord.stuckAt, ord.eating = nil, now, false
+            ord.lastX, ord.lastY = nil, nil
+            ord.navBody, ord.eating = nil, false
 
             HZ.try("retargetClear", function() HZ.clearEat(z) end)
             if HZ.debugEnabled() then
@@ -398,25 +398,38 @@ function HZ.navOne(z, ord, now)
                 return
             end
 
-            ord.stuckAt = now
-            ord.bestD = d
+            -- 引擎当前的进食目标是不是我们要的那具尸体
+            local et = nil
+            HZ.try("eatTarget", function() et = z:getEatBodyTarget() end)
+            local onTarget = (et ~= nil and et == body)
 
-            -- 只在「确实还没挂上」且距上次尝试超过 8 秒时才重设。
-            -- 引擎在进入进食状态后可能把 eatBodyTarget 读成 null，
-            -- 每拍重设会把状态机反复推回 idle，看起来一直在抽。
-            local retryAt = ord.arriveAt
-            if (not hasTgt) and (not retryAt or (now - retryAt) > 8000) then
-                HZ.try("arrive", function()
-                    z:setDefaultState()
-                    z:setEatBodyTarget(body, true)   -- force：绕 3 人上限
-                    z:setForceEatingAnimation(true)
-                end)
-                ord.arriveAt = now
-                -- 记录吃饭起点，退出时按时长结算饱食度
-                if HZ.statsEatStart then HZ.statsEatStart(z) end
-                ord.faceNext = true      -- 下一次维护再转一次，之后不再改
+            if not onTarget then
+                -- 没挂上/挂到别的尸体：每秒重发一次，直到引擎真的接受。
+                -- 不能只发一次：目标不是尸体时引擎会静默丢弃，之后永远不吃。
+                if (now - (ord.arriveAt or 0)) > 1000 then
+                    HZ.try("arrive", function()
+                        z:setDefaultState()
+                        z:setEatBodyTarget(body, true)   -- force：绕 3 人上限
+                        z:setForceEatingAnimation(true)
+                    end)
+                    ord.arriveAt = now
+                    ord.faceNext = true                  -- 下一次维护再转一次，之后不再改
+                end
+
+                -- 没挂上就不算在吃，避免饱食度按"到点时长"虚增
+                if ord.eating then
+                    if HZ.statsEatStop then HZ.statsEatStop(z) end
+                    ord.eating = false
+                end
+                ord.osc, ord.targetMiss = nil, 0
+                return
             end
-            ord.eating = true
+
+            if not ord.eating then
+                ord.eating = true
+                if HZ.statsEatStart then HZ.statsEatStart(z) end   -- 真正吃上才开始计时
+            end
+            ord.osc, ord.targetMiss = nil, 0     -- 已经到餐桌：振荡窗口/偏离计数作废
         else
             if ord.eating then
                 HZ.try("leaveTable", function()
@@ -427,88 +440,127 @@ function HZ.navOne(z, ord, now)
                 ord.eating = false
             end
 
-            if ord.stuckAt and (now - ord.stuckAt) > HZ.emitIntervalMs() * 6 then
-                -- 卡住了先看脚下：脚下有尸体就改吃它，别浪费这张单
-                local foot, footRec = footBodyAt(z, pile)
+            -- 卡住判定必须排除「已到达」的三种情况：
+            --   正在吃 / 离尸体 keepD+1.5 内（在等餐位）/ 引擎已给进食目标且就在附近
+            local atTable = ord.eating
+                or (d and d <= keepD + 1.5)
+                or (hasTgt and d and d <= keepD + 4)
 
-                if foot and footRec then
-                    -- 目标改成脚下的尸体（订单额度从旧尸转移到新尸）
-                    if ord.rec then
+            if ord.stuckNow and not atTable then
+                -- 卡住了：立刻换尸体，不要站在原地等派单
+                -- ① 脚下有尸体就改吃它（目标就在嘴边，最快）
+                local nb, nrec = footBodyAt(z, pile)
+                -- ② 脚下没有就在本堆里另找一具能吃的，当场换过去
+                if not nb then nb, nrec = otherRecInPile(pile, z, ord.rec) end
+
+                if nb and nrec then
+                    -- 餐位从旧尸体转移到新尸体
+                    if ord.rec and ord.rec ~= nrec then
                         ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1)
+                        -- 卡住的那具给自己一段长冷却，别下一拍又派回来
+                        ord.rec.blocked = ord.rec.blocked or {}
+                        ord.rec.blocked[z] = now + longBlockMs()
                     end
-                    footRec.orders = (footRec.orders or 0) + 1
+                    nrec.orders = (nrec.orders or 0) + 1
 
                     -- 换目标前先结算已吃的时长，否则走路时间被算成进食
                     if ord.eating and HZ.statsEatStop then HZ.statsEatStop(z) end
 
-                    ord.body  = foot
-                    ord.rec   = footRec
-                    ord.bestD = nil
+                    ord.body  = nb
+                    ord.rec   = nrec
                     ord.lastX, ord.lastY = nil, nil   -- 强制下一次维护发新 path
-                    ord.stuckAt = now
-                    ord.eating = false
+                    ord.navBody, ord.osc, ord.stuckNow = nil, nil, false
+                    ord.targetMiss, ord.eating = 0, false
 
                     HZ.try("retarget", function()
                         HZ.clearEat(z)
                     end)
                 else
-                    -- 脚下没尸体：释放回队，换下一只。
-                    -- 释放后这只对当前尸体长冷却（60 秒），避免它立刻又被派回同一具。
-                    HZ.releaseOrder(z, ord, true)
+                    -- 整堆都没有能换的尸体：才回队等空位
+                    HZ.releaseOrder(z, ord, true)   -- 餐位 -1，认领保留，回队列
                     if ord.rec then
                         ord.rec.blocked = ord.rec.blocked or {}
                         ord.rec.blocked[z] = now + longBlockMs()
                     end
-                    HZ.joinQueue(z, pile)
                 end
             else
-                -- 导航：只在「第一次 / 目标换了 / 连续两个间隔没位移」时发 path。
-                -- 正常走路时目标没变 → 不重发，避免每 2 秒重算一次 A*。
+                -- 导航 + 两拍判定：位移不足 0.3 = 卡住；目标不是我们给的目的地 = 被拉走
                 local x, y = nil, nil
                 HZ.try("getX", function() x, y = z:getX(), z:getY() end)
 
-                local firstNav   = (ord.lastX == nil)
+                local firstNav    = (ord.lastX == nil)
                 local bodyChanged = (ord.navBody ~= body)
                 if bodyChanged then ord.navBody = body end
 
-                local moved = true
-                if x and ord.lastX then
-                    moved = (math.abs(x - ord.lastX) + math.abs(y - ord.lastY)) > 0.2
-                end
-
-                -- 慢速/爬行不误判：连续两次没动才算卡住
-                if moved then
-                    ord.still = 0
-                    ord.stuckAt = now        -- 在动就不算卡住
-                else
-                    ord.still = (ord.still or 0) + 1
-                end
-
-                -- 靠近目标还停着 = 在等餐位，重发 path 只会把现有路径清掉，越等越顿
+                -- 已经在餐位边上等位，不算卡住
                 local waiting = (d and d <= keepD + 1.5)
 
+
+                -- ② 目标：引擎当前的目标不是我们导航给的目的地 → 被玩家/声音拉走了
+                --    连续两拍不一致 → 交还餐位，保留认领，跟丢后回来再派单
+                local tx, ty = nil, nil
+                HZ.try("pfTarget", function()
+                    local pf = z:getPathFindBehavior2()
+                    if pf then tx, ty = pf:getTargetX(), pf:getTargetY() end
+                end)
+                if not waiting and tx and ty and ord.navX then
+                    if math.abs(tx - ord.navX) < 0.6 and math.abs(ty - ord.navY) < 0.6 then
+                        ord.targetMiss = 0
+                    else
+                        ord.targetMiss = (ord.targetMiss or 0) + 1
+                    end
+                else
+                    ord.targetMiss = 0
+                end
+
+                if (ord.targetMiss or 0) >= 2 then
+                    if HZ.debugEnabled() then
+                        HZ.log(string.format("lure uid=%s nav=(%.1f,%.1f) target=(%.1f,%.1f) d=%.1f",
+                            tostring(ord.uid), ord.navX or -1, ord.navY or -1,
+                            tx or -1, ty or -1, d or -1))
+                    end
+                    HZ.releaseOrder(z, ord, true)
+                    return
+                end
+
+                -- ③ 真卡住：目标没偏离（走到这里说明目标一致），但位置只在一个小范围里来回波动
+                --    地形 / 被别的丧尸挤住才会这样。位置每拍采一次，至少 4 拍（约 8 秒）才判定；
+                --    只要它真的在往外走，窗口就会被撑开，永远不会误判。
+                if x and not waiting then
+                    local win = ord.osc
+                    if not win then
+                        win = { n = 0, minX = x, maxX = x, minY = y, maxY = y }
+                        ord.osc = win
+                    end
+                    win.n = win.n + 1
+                    if x < win.minX then win.minX = x end
+                    if x > win.maxX then win.maxX = x end
+                    if y < win.minY then win.minY = y end
+                    if y > win.maxY then win.maxY = y end
+
+                    -- 走出 2 格说明它确实在赶路：窗口重开，从当前位置重新算
+                    if (win.maxX - win.minX) + (win.maxY - win.minY) > 2.0 then
+                        win.n, win.minX, win.maxX, win.minY, win.maxY = 1, x, x, y, y
+                    end
+
+                    if win.n >= 4 and (win.maxX - win.minX) + (win.maxY - win.minY) < 0.8 then
+                        ord.stuckNow = true
+                    end
+                else
+                    ord.osc, ord.stuckNow = nil, false
+                end
+
                 local needNav = firstNav or bodyChanged
-                    or ((ord.still or 0) >= 4 and not waiting)
 
                 if needNav and (now - (ord.navAt or 0)) > HZ.emitIntervalMs() then
                     navBump("path")
-                    navBump(firstNav and "first" or (bodyChanged and "body" or "still"))
+                    navBump(firstNav and "first" or "body")
 
+                    ord.navX, ord.navY = body:getX(), body:getY()
                     HZ.try("nav", function()
                         z:pathToLocationF(body:getX(), body:getY(), body:getZ())
                     end)
                     ord.navAt = now
-                    ord.still = 0
-                end
-
-                -- 距离长期不改善 -> 记为卡住
-                if d then
-                    if ord.bestD == nil or d < ord.bestD - 0.2 then
-                        ord.bestD = d
-                        ord.stuckAt = now
-                    elseif not ord.stuckAt then
-                        ord.stuckAt = now
-                    end
                 end
 
                 if x then

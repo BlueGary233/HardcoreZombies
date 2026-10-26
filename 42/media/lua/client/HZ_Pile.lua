@@ -1,6 +1,7 @@
 -- HZ_Pile.lua — 尸堆（主单位）
--- 食物按 5×5 网格归堆：进堆只存位置，死亡时间/腐化时间从尸体对象现算
--- 每帧只处理一个堆：维护 → 发声（有气味）→ 派单 → 订单续 path
+-- 食物按 PileSize 网格归堆（默认 2 → 5×5）：进堆只存位置，死亡时间/腐化时间从尸体对象现算
+-- tickPiles 每拍只处理一个堆：维护 → 骨化 → 发声（有气味）
+-- 派单和续单不在这里：tickOneDispatch / tickOneOrder 各自用全局队列
 
 HardcoreZombies = HardcoreZombies or {}
 

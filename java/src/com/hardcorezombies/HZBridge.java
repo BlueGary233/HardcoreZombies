@@ -20,9 +20,11 @@ import zombie.iso.objects.IsoDeadBody;
 /**
  * HardcoreZombies Java 桥接层
  *
- * 把"丧尸属于哪个尸堆的声音组"暴露给 Lua。
- * Lua 用 HZ_setGroup(zombie, groupId) 绑定，
- * 之后 patch 层会过滤掉其他组的声音。
+ * 丧尸状态只有两个字段，全部存在 modData 里，Lua 侧不存副本：
+ *   hz_buff  位掩码：1=新生 2=开饭 4=饥饿 8=静音 16=受伤
+ *   hz_pile  认领的尸堆 pid = floor(x)*100000 + floor(y)
+ *
+ * patch 层只读静音位（8）：已接单的丧尸不听本 mod 的声音。
  */
 @Exposer.LuaClass
 public class HZBridge {

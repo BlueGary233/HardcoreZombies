@@ -128,7 +128,40 @@ function HZ.reloadMod()
     HZ.clearRuntimeState()
     HZ.invalidateOptCache()
 
-    print("[HZ] reloaded")
+    
+-- 调试入口：0 键热重载 + 文件的看门狗（Loader 不在重载列表，注册一次永久有效）
+Events.OnKeyStartPressed.Add(function(key)
+    if key == Keyboard.KEY_0 and HZ.reloadMod then pcall(HZ.reloadMod) end
+end)
+
+Events.OnTick.Add(function()
+    local now = getTimestampMs()
+    if now < (HZ._flagNextMs or 0) then return end
+    HZ._flagNextMs = now + 1000
+
+    local v
+    for _, path in ipairs({ "Lua/HZ_reload.txt", "HZ_reload.txt" }) do
+        local ok, r = pcall(getFileReader, path, false)
+        if ok and r then
+            pcall(function() v = r:readLine() end)
+            pcall(function() r:close() end)
+            if v ~= nil then break end
+        end
+    end
+    if v == nil then return end
+    if HZ._flagLast == nil then
+        HZ._flagLast = v
+        print("[HZ] watcher ready, flag=" .. tostring(v))
+        return
+    end
+    if v ~= HZ._flagLast then
+        HZ._flagLast = v
+        print("[HZ] flag changed -> reload")
+        if HZ.reloadMod then pcall(HZ.reloadMod) end
+    end
+end)
+
+print("[HZ] reloaded")
 end
 
 -- ===================== ModOptions 注册 =====================

@@ -15,11 +15,13 @@ import zombie.iso.IsoWorld;
 import zombie.network.GameServer;
 
 /**
- * 替换原版的声音选择逻辑，加入"声音组"过滤。
+ * 替换原版的声音选择逻辑（WorldSoundManager.getBiggestSoundZomb）。
  *
- * Lua 通过 HZ_setGroup(zombie, group) 给丧尸绑定组；
- * 发声时把 group 作为 addSound 的 source 传进来。
- * 只有同组的丧尸能听到这条声音。
+ * 已接单 / 进食中的丧尸（hz_buff 的静音位 8）忽略本 mod 发出的声音，
+ * 但原版声音（枪声、脚步）照常响应 —— 玩家仍然可以用它们把丧尸引走。
+ *
+ * 本 mod 的声音用数字型 source 标记（pile.group），
+ * 只有数字 source 才会被静音位过滤，这样就能和原版声音区分开。
  */
 @Patch(className = "zombie.WorldSoundManager",
        methodName = "getBiggestSoundZomb",
