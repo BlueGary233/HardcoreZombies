@@ -347,7 +347,10 @@ function HZ.navOne(z, ord, now)
             -- 换目标前结算已经吃的时长
             if ord.eating and HZ.statsEatStop then HZ.statsEatStop(z) end
 
-            ord.body, ord.rec = nb, nrec
+            if ord.rec and ord.rec ~= nrec and ord.rec.orders then
+        ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1)
+    end
+    ord.body, ord.rec = nb, nrec
             ord.lastX, ord.lastY = nil, nil
             ord.navBody, ord.eating = nil, false
 
@@ -1384,6 +1387,29 @@ local function v2CellTurn(cell, now)
     local free = v2MaxEaters()
     for _ in pairs(cell.orders) do free = free - 1 end
     if free <= 0 then return end
+
+    -- 配额：本堆还有几个格子没坐满、还有几个没单的丧尸。
+    -- 不配额的话，环序靠前的格子会把附近丧尸一次抢光，后面的格子一具都分不到。
+    local pending, freeZ = 0, 0
+    do
+        local cs = pile.cells or {}
+        for i = 1, #cs do
+            local c = cs[i]
+            local n = 0
+            for _ in pairs(c.orders) do n = n + 1 end
+            if #c.recs > 0 and n < v2MaxEaters() then pending = pending + 1 end
+        end
+        local cd = pile.cand or {}
+        for i = 1, #cd do
+            local e = cd[i]
+            if e and e.z and not (HZ._orders and HZ._orders[e.z]) then freeZ = freeZ + 1 end
+        end
+        if pending > 1 and freeZ > 0 then
+            local quota = math.ceil(freeZ / pending)
+            if quota < 1 then quota = 1 end
+            if free > quota then free = quota end
+        end
+    end
 
     -- 自然顺序：第一具吃完/骨化才轮到下一具；未加载的跳过本轮
     local rec, body
