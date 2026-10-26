@@ -1724,6 +1724,15 @@ function HZ.tickOrder(z, ord, now)
             end
         end)
 
+        -- 目标坐标是对的、引擎也说在走，但距离反而在变大：
+        -- 说明它被"追击目标"（声音/玩家/游荡）接管了，寻路目标只是挂着。
+        -- 旧代码只在 isGoalNone / 偏离计数时才重发，抓不到这种情况。
+        if onTarget and ord.lastD and d > ord.lastD + 1.0 then
+            onTarget = false
+            HZ._cFarAway = (HZ._cFarAway or 0) + 1
+        end
+        ord.lastD = d
+
         if not onTarget then
             -- 先打断当前状态（声音目标），再重新下令
             HZ.try("tickIdle", function() z:setDefaultState() end)
