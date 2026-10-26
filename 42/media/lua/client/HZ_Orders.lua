@@ -1261,12 +1261,24 @@ function HZ.v2Cycle()
         local nb, nc, bo, ns = HZ._cNoBody or 0, HZ._cNoCorpse or 0, HZ._cBone or 0, HZ._cNoSq or 0
         HZ._navAtt, HZ._navOk, HZ._tickCnt, HZ._retCnt = 0, 0, 0, 0
         HZ._cNoBody, HZ._cNoCorpse, HZ._cBone, HZ._cNoSq, HZ._cRecGone = 0, 0, 0, 0, 0
+        HZ._cNoRec, HZ._cNoCand = 0, 0
         local sn = (HZ._snap and HZ._snap.n) or 0
         local cz, co, cb = HZ._candZ or 0, HZ._candSkipOrd or 0, HZ._candBest or 0
         local seats = 0
         for i = 1, #piles do seats = seats + (piles[i].openSeats or 0) end
-        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d recGone=%d bone=%d noSq=%d] d=[%.1f..%.1f]",
-            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, (HZ._cRecGone or 0), bo, ns,
+        -- 每堆一行简表：坐标 / 室内 / 空餐位 / 可接单 / 格子数
+        local pl = {}
+        for i = 1, #piles do
+            local p = piles[i]
+            local seats = p.openSeats or 0
+            pl[#pl + 1] = string.format("%d:%d in=%s seats=%d cand=%d cells=%d",
+                math.floor(p.x or 0), math.floor(p.y or 0),
+                tostring(p.indoor == true), seats, #(p.cand or {}), #(p.cells or {}))
+        end
+        if #pl > 0 then HZ.log("piles " .. table.concat(pl, " | ")) end
+
+        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d recGone=%d bone=%d noSq=%d noRec=%d noCand=%d] d=[%.1f..%.1f]",
+            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, (HZ._cRecGone or 0), bo, ns, (HZ._cNoRec or 0), (HZ._cNoCand or 0),
             dmin > 1e8 and -1 or dmin, dmax))
     end
 
@@ -1407,10 +1419,16 @@ local function v2CellTurn(cell, now)
         local r = cell.recs[i]
         if r and r.body then rec, body = r, r.body; break end
     end
-    if not rec then return end
+    if not rec then
+        HZ._cNoRec = (HZ._cNoRec or 0) + 1      -- 格子里有 rec，但没有一个能解析出 body
+        return
+    end
 
     local cand = pile.cand
-    if not cand or #cand == 0 then return end
+    if not cand or #cand == 0 then
+        HZ._cNoCand = (HZ._cNoCand or 0) + 1    -- 有餐位、有尸体，但本堆没有可接单丧尸
+        return
+    end
 
     local cx, cy = body:getX(), body:getY()
     while free > 0 and #cand > 0 do
@@ -1713,14 +1731,18 @@ function HZ.tickOrder(z, ord, now)
     if (not ord.eating) and (ord.stillMs or 0) > 5000
         and HZ.due("stuck" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
         local et, px, py, bx, by = nil, -1, -1, -1, -1
+        local gx, gy, gnone = -1, -1, "?"
         HZ.try("stuckInfo", function()
             et = z:getEatBodyTarget()
             px, py = z:getX(), z:getY()
             bx, by = ord.body:getX(), ord.body:getY()
+            local pf = z:getPathFindBehavior2()
+            gnone = tostring(pf:isGoalNone())
+            gx, gy = pf:getTargetX(), pf:getTargetY()
         end)
-        HZ.log(string.format("stuck uid=%s d=%.1f still=%dms fails=%d et=%s z=(%.1f,%.1f) body=(%.1f,%.1f)",
+        HZ.log(string.format("stuck uid=%s d=%.1f still=%dms fails=%d et=%s z=(%.1f,%.1f) body=(%.1f,%.1f) goal=(%.1f,%.1f) none=%s",
             tostring(ord.uid), d, math.floor(ord.stillMs or 0), ord.eatFails or 0,
-            tostring(et), px, py, bx, by))
+            tostring(et), px, py, bx, by, gx, gy, gnone))
     end
 
     -- ④ 距离 > 1.0：要么在赶路，要么在桌边等位 —— 两种情况都要保证导航活着。
@@ -1739,10 +1761,9 @@ function HZ.tickOrder(z, ord, now)
         end
 
         -- 引擎当前目标是不是我们给的那具尸体
-        -- 不能用 isTargetLocation：它内部是 targetX == x 的浮点全等比较，
-        -- 而 pathToLocationF 会把目标吸附到格子中心，尸体坐标是物体中心（如 2134.7），
-        -- 两者永远不相等 → onTarget 恒 false → 每 2 秒重下发一次 setDefaultState+path，
-        -- 丧尸被反复打断，看起来就在原地游荡。
+        -- 用 0.75 格容差和引擎目标比。isTargetLocation 是浮点全等（fcmpl），
+        -- 只要引擎内部对 target 做过任何取整/修正就会判 false，进而每拍重下发。
+        -- 容差比较不改变“目标一致”的语义，只去掉这种脆弱的全等依赖。
         local onTarget = false
         local bx, by, bz = ord.body:getX(), ord.body:getY(), ord.body:getZ()
         local tx, ty = nil, nil
@@ -1762,6 +1783,23 @@ function HZ.tickOrder(z, ord, now)
             HZ._cFarAway = (HZ._cFarAway or 0) + 1
         end
         ord.lastD = d
+
+        -- 引擎把目标设成了自己脚下（寻路不可达时会这样）→ 记一次失败
+        local selfGoal = false
+        if tx and ty and x and y then
+            selfGoal = (math.abs(tx - x) < 0.75 and math.abs(ty - y) < 0.75)
+        end
+        if selfGoal and d > WAIT_R then
+            ord.navFail = (ord.navFail or 0) + 1
+            if ord.navFail >= 3 then
+                ord.navFail = 0
+                HZ._cNoPath = (HZ._cNoPath or 0) + 1
+                retargetOrRelease(z, ord, now)     -- 这条路走不通，换尸体
+                return
+            end
+        else
+            ord.navFail = 0
+        end
 
         if not onTarget then
             -- 先打断当前状态（声音目标），再重新下令
