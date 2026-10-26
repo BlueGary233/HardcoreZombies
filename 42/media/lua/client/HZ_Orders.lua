@@ -497,6 +497,35 @@ function HZ.navOne(z, ord, now)
                 -- 已经在餐位边上等位，不算卡住
                 local waiting = (d and d <= keepD + 1.5)
 
+                -- 挤不进去：贴到餐桌 5 秒还没挂上进食目标（被别的丧尸堵住），
+                -- 换到本堆另一格有空位的地方；换不到就释放，让它去别的堆
+                -- 只对「真的贴在餐桌前（1.7 格内）」的算挤住；还在路上走的不算
+                if waiting and not ord.eating and d and d <= (keepD + 0.5) then
+                    ord.waitAt = ord.waitAt or now
+                    if (now - ord.waitAt) > 5000 then
+                        ord.waitAt = nil
+                        local moved = false
+                        if HZ.v2PickOther and ord.cell then
+                            local nb, nrec, ncell = HZ.v2PickOther(pile, ord.cell, z)
+                            if nb then
+                                if ord.cell.orders then ord.cell.orders[z] = nil end
+                                if ord.rec then ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1) end
+                                nrec.orders = (nrec.orders or 0) + 1
+                                ncell.orders[z] = ord
+                                ord.body, ord.rec, ord.cell = nb, nrec, ncell
+                                ord.navBody, ord.navX, ord.navY = nil, nil, nil
+                                ord.eating = false
+                                HZ.try("blockedRetarget", function() HZ.clearEat(z) end)
+                                moved = true
+                            end
+                        end
+                        if not moved then HZ.releaseOrder(z, ord, false) end
+                        return
+                    end
+                else
+                    ord.waitAt = nil
+                end
+
 
                 -- ② 目标：引擎当前的目标不是我们导航给的目的地 → 被玩家/声音拉走了
                 --    连续两拍不一致 → 交还餐位，保留认领，跟丢后回来再派单
@@ -1337,6 +1366,31 @@ function HZ.v2Tick()
         if cell and cell.pile then v2CellTurn(cell, now) end
     end
     V2.pos = (start + chunk) % n
+end
+
+
+-- 换格：在本堆里找另一个还有空位、且首尸可用的格子
+function HZ.v2PickOther(pile, curCell, z)
+    local cells = pile and pile.cells
+    if not cells then return nil end
+    for i = 1, #cells do
+        local c = cells[i]
+        if c ~= curCell then
+            local n = 0
+            for _ in pairs(c.orders) do n = n + 1 end
+            if n < v2MaxEaters() then
+                for j = 1, #c.recs do
+                    local rec = c.recs[j]
+                    local b = rec.body or (HZ.findBody and HZ.findBody(rec)) or nil
+                    rec.body = b
+                    if b and not (HZ.isBone and HZ.isBone(b)) then
+                        return b, rec, c
+                    end
+                end
+            end
+        end
+    end
+    return nil
 end
 
 -- 堆回收空格子（骨化后没有尸体了）
