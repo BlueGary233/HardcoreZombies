@@ -71,8 +71,8 @@ function HZ.refreshBuffs(z, pid)
 
     if not s then
         bits = B.NEW
-    elseif pid ~= 0 then
-        bits = B.QUEUED + B.MUTE          -- 开饭顶掉饥饿
+    elseif (HZ._orders and HZ._orders[z]) or pid ~= 0 then
+        bits = B.QUEUED + B.MUTE          -- 有订单（v2）或旧认领：开饭 + 静音
     elseif (s.satiety or 0) < 2 then
         bits = B.HUNGRY                   -- 饥饿：没有静音
     else
@@ -112,9 +112,9 @@ end
 
 -- 进队：写认领，重算 buff
 function HZ.joinQueue(z, pile)
-    if not z or not pile then return end
-    if HZ_setPile then pcall(HZ_setPile, z, pile.pid) end
-    HZ.refreshBuffs(z, pile.pid)
+    -- v2：可接单队列改为纯数据视图，不再写认领/状态。
+    -- 保留函数体为空，旧调用点（navOne 释放后回队等）自然失效。
+    return
 end
 
 -- 堆消失：把它认领的丧尸全部放回自由。
@@ -1055,4 +1055,258 @@ function HZ.tickOneOrder()
     local z = keys[HZ._ordCursor]
     local ord = z and t[z]
     if ord then HZ.navOne(z, ord, now) end
+end
+
+-- ============================================================================
+-- v2 结构层：尸体 → 格子 → 尸堆（旧函数全部保留，只是不再被调用）
+--
+--   尸堆时间片 2s：按格子数加权（格子多的堆在调度序列里占更多格位）
+--      └ 每个格子一圈内必被轮到一次
+--          ├ 派单：从本堆可接单队列里取「最近的、够餐位数」的丧尸
+--          └ 维护：调用旧的 navOne，行为完全沿用 0.3.0
+--
+--   可接单队列：纯数据，每 2s 重建；没有订单的丧尸只出现在「离它最近 + 有空位」的堆
+--   格子：尸体按入格自然顺序，第一具独享本格全部餐位，吃完/骨化才轮到下一具
+-- ============================================================================
+local V2 = HZ.v2 or {}
+HZ.v2 = V2
+
+local function v2MaxEaters()
+    return math.max(1, math.floor(tonumber(HZ.opt.MaxEaters) or 4))
+end
+
+local function v2Key(rec)
+    return math.floor(rec.x or 0) .. ":" .. math.floor(rec.y or 0) .. ":" .. math.floor(rec.z or 0)
+end
+
+local function v2Cells(pile)
+    return pile and pile.cells or {}
+end
+
+-- 重建某堆的格子表（foods 变了才重建），按「堆中心 → 外围」分环，环内保持入格顺序
+local function v2BuildCells(pile)
+    local ver = pile._foodsVer or 0
+    if pile._v2Ver == ver and pile.cells then return end
+
+    local byKey, cells = {}, {}
+    for i = 1, #(pile.foods or {}) do
+        local rec = pile.foods[i]
+        local k = v2Key(rec)
+        local c = byKey[k]
+        if not c then
+            c = { key = k, x = math.floor(rec.x or 0), y = math.floor(rec.y or 0),
+                  z = math.floor(rec.z or 0), pile = pile, recs = {}, orders = {} }
+            byKey[k] = c
+            cells[#cells + 1] = c
+        end
+        c.recs[#c.recs + 1] = rec
+        rec._cell = c
+    end
+
+    -- 环序：不用 table.sort（Kahlua 没有）
+    local rings, maxRing = {}, 0
+    for i = 1, #cells do
+        local c = cells[i]
+        local d = math.max(math.abs(c.x - pile.x), math.abs(c.y - pile.y))
+        c.ring = d
+        if d > maxRing then maxRing = d end
+        rings[d] = rings[d] or {}
+        local rr = rings[d]
+        rr[#rr + 1] = c
+    end
+
+    local ordered = {}
+    for r = 0, maxRing do
+        local rr = rings[r]
+        if rr then
+            for i = 1, #rr do ordered[#ordered + 1] = rr[i] end
+        end
+    end
+
+    pile.cells = ordered
+    pile.cellByKey = byKey
+    pile._v2Ver = ver
+end
+
+-- 重建调度序列：所有堆的格子首尾相接 → 格子多的堆自然占更多格位（时间片加权）
+function HZ.v2Cycle()
+    if not HZ.due("v2cycle", 2000) then return end
+
+    local sched = {}
+    local piles = HZ.piles or {}
+    for i = 1, #piles do
+        local pile = piles[i]
+        if not pile.dead then
+            v2BuildCells(pile)
+            HZ.v2PruneCells(pile)
+            local cells = pile.cells or {}
+            for j = 1, #cells do sched[#sched + 1] = cells[j] end
+        end
+    end
+
+    V2.sched = sched
+    V2.pos = 0
+    V2.slot = 0
+
+    -- 可接单队列：纯数据，每 2s 重建一次
+    local snap = HZ._snap
+    for i = 1, #piles do
+        local pile = piles[i]
+        pile.cand, pile.candSet = {}, {}
+        local seats = 0
+        local cells = pile.cells or {}
+        for j = 1, #cells do
+            local n = 0
+            for _ in pairs(cells[j].orders) do n = n + 1 end
+            seats = seats + math.max(0, v2MaxEaters() - n)
+        end
+        pile.openSeats = seats
+    end
+
+    if not snap then return end
+
+    for i = 1, snap.n do
+        local z = snap.obj[i]
+        if z and not (HZ._orders and HZ._orders[z]) then
+            local x, y = snap.x[i], snap.y[i]
+            local best, bestD = nil, nil
+            for k = 1, #piles do
+                local pile = piles[k]
+                if not pile.dead and (pile.openSeats or 0) > 0 then
+                    local mx, my = pile.sourceX or pile.x, pile.sourceY or pile.y
+                    local R = tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
+                    local dx, dy = x - mx, y - my
+                    local d = dx * dx + dy * dy
+                    if d <= R * R and (not bestD or d < bestD) then best, bestD = pile, d end
+                end
+            end
+            if best then
+                best.cand[#best.cand + 1] = { z = z, x = x, y = y }
+                best.candSet[z] = true
+            end
+        end
+    end
+end
+
+-- 一格的行动：先维护订单，再派单（第一具尸体独享全部餐位）
+local function v2CellTurn(cell, now)
+    local pile = cell.pile
+    if not pile or pile.dead then return end
+
+    -- 骨化 / 移除：rec 已经不在堆的 foods 里 → 摘掉；obj 骨化 → 摘掉
+    -- 拿不到对象（未加载）→ 保留，本轮跳过
+    local fs = foodSet and foodSet(pile) or nil
+    for i = #cell.recs, 1, -1 do
+        local rec = cell.recs[i]
+        if fs and not fs[rec] then
+            cell.recs[i] = nil
+        else
+            local b = rec.body
+            if not b then
+                b = (HZ.findBody and HZ.findBody(rec)) or nil
+                rec.body = b
+            end
+            if b and HZ.isBone and HZ.isBone(b) then
+                cell.recs[i] = nil
+            end
+        end
+    end
+
+    -- 维护本格订单：沿用旧的 navOne
+    if HZ.navOne then
+        local keys = {}
+        for z in pairs(cell.orders) do keys[#keys + 1] = z end
+        for i = 1, #keys do
+            local z = keys[i]
+            local ord = cell.orders[z]
+            if z and ord and HZ._orders[z] == ord then
+                local ok = pcall(HZ.navOne, z, ord, now)
+                if not ok and HZ._orders then HZ._orders[z] = nil end
+            end
+        end
+    end
+
+    -- 派单
+    local free = v2MaxEaters()
+    for _ in pairs(cell.orders) do free = free - 1 end
+    if free <= 0 then return end
+
+    -- 自然顺序：第一具吃完/骨化才轮到下一具；未加载的跳过本轮
+    local rec, body
+    for i = 1, #cell.recs do
+        local r = cell.recs[i]
+        if r.body then rec, body = r, r.body; break end
+    end
+    if not rec then return end
+
+    local cand = pile.cand
+    if not cand or #cand == 0 then return end
+
+    local cx, cy = body:getX(), body:getY()
+    while free > 0 and #cand > 0 do
+        local bi, bd
+        for i = 1, #cand do
+            local e = cand[i]
+            if e and e.z and not (HZ._orders and HZ._orders[e.z]) then
+                local dx, dy = e.x - cx, e.y - cy
+                local d = dx * dx + dy * dy
+                if (not bd) or d < bd then bi, bd = i, d end
+            end
+        end
+        if not bi then break end
+
+        local e = table.remove(cand, bi)
+        local z = e.z
+
+        local ord = {
+            pile = pile, rec = rec, body = body, uid = rec.uid, cell = cell,
+        }
+        HZ._orders = HZ._orders or {}
+        HZ._orders[z] = ord
+        pile.orders = pile.orders or {}
+        pile.orders[z] = ord
+        cell.orders[z] = ord
+        rec.orders = (rec.orders or 0) + 1
+
+        HZ.try("v2forceIdle", function() z:setDefaultState() end)
+        HZ.refreshBuffs(z)
+
+        free = free - 1
+        pile.openSeats = math.max(0, (pile.openSeats or 0) - 1)
+    end
+end
+
+-- 2 秒内轮完一圈：每 250ms 处理 ceil(总数/8) 个格子
+function HZ.v2Tick()
+    local sched = V2.sched
+    local n = sched and #sched or 0
+    if n == 0 then return end
+
+    local SLOTS = 8
+    if not HZ.due("v2cell", 2000 / SLOTS) then return end
+
+    V2.slot = ((V2.slot or 0) % SLOTS) + 1
+    local chunk = math.ceil(n / SLOTS)
+    local now = getTimestampMs()
+    local start = V2.pos or 0
+
+    for k = 0, chunk - 1 do
+        local i = (start + k) % n + 1
+        local cell = sched[i]
+        if cell and cell.pile then v2CellTurn(cell, now) end
+    end
+    V2.pos = (start + chunk) % n
+end
+
+-- 堆回收空格子（骨化后没有尸体了）
+function HZ.v2PruneCells(pile)
+    local cells = pile and pile.cells
+    if not cells then return end
+    for i = #cells, 1, -1 do
+        local c = cells[i]
+        if #c.recs == 0 and next(c.orders) == nil then
+            table.remove(cells, i)
+            if pile.cellByKey then pile.cellByKey[c.key] = nil end
+        end
+    end
 end

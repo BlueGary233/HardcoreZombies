@@ -744,7 +744,6 @@ function HZ.tickPiles()
     -- ⑤ 补队：快照代数变了才跑（4 秒一次/堆）
     if p.snapGen ~= HZ._snapGen then
         p.snapGen = HZ._snapGen
-        if HZ.refillQueue then pcall(HZ.refillQueue, p) end
     end
 end
 
