@@ -1266,13 +1266,13 @@ function HZ.v2Cycle()
         local tickCnt, retCnt = HZ._tickCnt or 0, HZ._retCnt or 0
         local nb, nc, bo, ns = HZ._cNoBody or 0, HZ._cNoCorpse or 0, HZ._cBone or 0, HZ._cNoSq or 0
         HZ._navAtt, HZ._navOk, HZ._tickCnt, HZ._retCnt = 0, 0, 0, 0
-        HZ._cNoBody, HZ._cNoCorpse, HZ._cBone, HZ._cNoSq = 0, 0, 0, 0
+        HZ._cNoBody, HZ._cNoCorpse, HZ._cBone, HZ._cNoSq, HZ._cRecGone = 0, 0, 0, 0, 0
         local sn = (HZ._snap and HZ._snap.n) or 0
         local cz, co, cb = HZ._candZ or 0, HZ._candSkipOrd or 0, HZ._candBest or 0
         local seats = 0
         for i = 1, #piles do seats = seats + (piles[i].openSeats or 0) end
-        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d bone=%d noSq=%d] d=[%.1f..%.1f]",
-            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, bo, ns,
+        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d recGone=%d bone=%d noSq=%d] d=[%.1f..%.1f]",
+            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, (HZ._cRecGone or 0), bo, ns,
             dmin > 1e8 and -1 or dmin, dmax))
     end
 
@@ -1596,13 +1596,22 @@ function HZ.tickOrder(z, ord, now)
 
     -- 尸体是否还在：用桥的 orderFlags（bit3 = body 存在且没骨化），和 0.3.0 的 navOne 一致。
     -- 不要拿 HZ.corpses 当判据 —— 那张表在 0.3.0 里根本没有维护者，永远是空表。
+    -- 尸体是否还能吃：桥的 bodyAlive（有 square、没骨化）**并且**这条记录还在堆的清单里。
+    -- 只判 bodyAlive 会漏掉"已经被吃完/骨化替换、但对象还在"的情况 ——
+    -- 那样丧尸会对着幻影继续吃，同一格里的下一具永远轮不到（不续单）。
     local bodyOk = false
     if not ord.body then
         HZ._cNoBody = (HZ._cNoBody or 0) + 1
     else
         local _, _, bodyAlive = orderFlags(z, ord.body)
-        if bodyAlive then
+        local recOk = true
+        if ord.rec and recByUid then
+            recOk = (recByUid(pile, ord.rec.uid) ~= nil)
+        end
+        if bodyAlive and recOk then
             bodyOk = true
+        elseif not recOk then
+            HZ._cRecGone = (HZ._cRecGone or 0) + 1
         else
             HZ._cNoCorpse = (HZ._cNoCorpse or 0) + 1
         end
@@ -1700,6 +1709,22 @@ function HZ.v2PruneCells(pile)
     if not cells then return end
     for i = #cells, 1, -1 do
         local c = cells[i]
+        if #c.recs == 0 then
+            -- 格子没尸体了：它上面的订单必须先释放，否则格子从 pile.cells 消失后
+            -- 这些订单再也没人维护 —— 丧尸挂着订单呆立、也不吃东西
+            local zs = {}
+            for z in pairs(c.orders) do zs[#zs + 1] = z end
+            for k = 1, #zs do
+                local z = zs[k]
+                local o = c.orders[z]
+                if o and HZ._orders and HZ._orders[z] == o then
+                    HZ.releaseOrder(z, o, false)
+                else
+                    c.orders[z] = nil
+                end
+            end
+        end
+
         if #c.recs == 0 and next(c.orders) == nil then
             table.remove(cells, i)
             if pile.cellByKey then pile.cellByKey[c.key] = nil end
