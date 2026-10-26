@@ -347,10 +347,7 @@ function HZ.navOne(z, ord, now)
             -- 换目标前结算已经吃的时长
             if ord.eating and HZ.statsEatStop then HZ.statsEatStop(z) end
 
-            if ord.rec and ord.rec ~= nrec and ord.rec.orders then
-        ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1)
-    end
-    ord.body, ord.rec = nb, nrec
+            ord.body, ord.rec = nb, nrec
             ord.lastX, ord.lastY = nil, nil
             ord.navBody, ord.eating = nil, false
 
