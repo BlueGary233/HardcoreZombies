@@ -552,7 +552,9 @@ function HZ.navOne(z, ord, now)
                     ord.osc, ord.stuckNow = nil, false
                 end
 
-                local needNav = firstNav or bodyChanged
+                -- 目标丢失（引擎里 target=nil）也算需要重下：否则站着不动、有订单、没目标，永远不动
+                local lostTarget = (tx == nil and ty == nil)
+                local needNav = firstNav or bodyChanged or lostTarget
 
                 if needNav and (now - (ord.navAt or 0)) > HZ.emitIntervalMs() then
                     navBump("path")
@@ -1097,8 +1099,12 @@ local function v2BuildCells(pile)
         local k = v2Key(rec)
         local c = byKey[k]
         if not c then
+            -- orders 表按格子 key 存在堆上，格子重建时沿用同一张表
+            pile.cellOrders = pile.cellOrders or {}
+            local o = pile.cellOrders[k]
+            if not o then o = {}; pile.cellOrders[k] = o end
             c = { key = k, x = math.floor(rec.x or 0), y = math.floor(rec.y or 0),
-                  z = math.floor(rec.z or 0), pile = pile, recs = {}, orders = {} }
+                  z = math.floor(rec.z or 0), pile = pile, recs = {}, orders = o }
             byKey[k] = c
             cells[#cells + 1] = c
         end
