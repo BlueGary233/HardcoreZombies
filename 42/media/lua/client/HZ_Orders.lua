@@ -1314,8 +1314,13 @@ local function v2CellTurn(cell, now)
             local z = keys[i]
             local ord = cell.orders[z]
             if z and ord and HZ._orders[z] == ord then
-                local ok = pcall(tickFn, z, ord, now)
-                if not ok and HZ._orders then HZ._orders[z] = nil end
+                local ok, err = pcall(tickFn, z, ord, now)
+                if not ok then
+                    if HZ.debugEnabled and HZ.debugEnabled() and HZ.due("tickErrDbg", 3000) then
+                        HZ.log("tickOrder err: " .. tostring(err))
+                    end
+                    if HZ._orders then HZ._orders[z] = nil end
+                end
             end
         end
     end
@@ -1545,7 +1550,8 @@ function HZ.tickOrder(z, ord, now)
     if not okD or not d then d = 1e9 end
 
     -- ③ 位移
-    local okP, x, y = HZ.try("tickPos", function() return z:getX(), z:getY() end)
+    local x, y
+    local okP = HZ.try("tickPos", function() x, y = z:getX(), z:getY() end)
     local moved = false
     if okP and x then
         if ord.lastX then
