@@ -1832,7 +1832,9 @@ function HZ.tickOrder(z, ord, now)
             ord.navFail = 0
         end
 
-        if not onTarget and (now - (ord.navAt or 0)) > 1500 then
+        if not onTarget then
+            -- 频率天然就是 2 秒一次（每个格子每圈轮到一次，订单跟着格子走），
+            -- 不需要再叠一层节流。
             -- IsoZombie.pathToLocationF 的字节码：
             --   if (allowRepathDelay > 0 && (当前是 PathFindState/WalkTowardState/WalkTowardNetworkState)) return;
             -- 也就是说：正在走的时候再下发会被【直接丢弃】。
