@@ -1572,17 +1572,24 @@ function HZ.tickOrder(z, ord, now)
             HZ.try("tickLeaveTable", function() HZ.clearEat(z) end)
         end
 
-        local hasGoal = false
+        -- 引擎当前目标是不是我们给的那具尸体（不是"有没有目标"）
+        -- 被声音/玩家拉走时 isGoalNone 是 false，但目标不是尸体 —— 必须抢回来
+        local onTarget = false
+        local bx, by, bz = ord.body:getX(), ord.body:getY(), ord.body:getZ()
         HZ.try("tickGoal", function()
             local pf = z:getPathFindBehavior2()
-            hasGoal = pf and not pf:isGoalNone()
+            if pf and not pf:isGoalNone() then
+                onTarget = (pf:isTargetLocation(bx, by, bz) == true)
+            end
         end)
 
-        if not hasGoal or (ord.stillMs or 0) >= NAV_RETRY then
-            ord.navX, ord.navY = ord.body:getX(), ord.body:getY()
+        if (not onTarget) and (now - (ord.navAt or 0)) > 1000 then
+            -- 先打断当前状态（声音目标），再重新下令
+            HZ.try("tickIdle", function() z:setDefaultState() end)
+            ord.navX, ord.navY, ord.navZ = bx, by, bz
             ord.navBody = ord.body
             ord.navAt = now
-            HZ.try("tickNav", function() z:pathToLocationF(ord.navX, ord.navY, ord.body:getZ()) end)
+            HZ.try("tickNav", function() z:pathToLocationF(bx, by, bz) end)
         end
 
         if (ord.stillMs or 0) >= GIVEUP_MS then
