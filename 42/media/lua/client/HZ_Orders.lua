@@ -1688,6 +1688,14 @@ function HZ.tickOrder(z, ord, now)
 
     -- ⑤ 等位 / 挤住
     if d > EAT_R then
+        -- 迟滞：正在吃、且还在 1.2 格内 → 继续吃（0.3.0 的 keepD）。
+        -- 少了这一段，站在 1.0~1.2 格之间进食的丧尸每 2 秒会被清一次进食状态，
+        -- 表现就是"吃两口就停"。
+        if ord.eating and d <= EAT_R + 0.2 then
+            eatTick(z, ord, now)
+            return
+        end
+
         if ord.eating then
             ord.eating = false
             if HZ.statsEatStop then HZ.statsEatStop(z) end
