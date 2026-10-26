@@ -1186,20 +1186,6 @@ local function v2BuildCells(pile)
         end
     end
 
-    -- 关键：尸体吃光/骨化后格子会从 foods 里消失，但它的订单可能还在。
-    -- 这类格子必须留在调度序列里，否则订单没人维护（丧尸永远站着）
-    if pile.cellOrders then
-        for k, o in pairs(pile.cellOrders) do
-            if next(o) ~= nil and not byKey[k] then
-                local cx, cy, cz = string.match(k, "(-?%d+):(-?%d+):(-?%d+)")
-                local c = { key = k, x = tonumber(cx) or pile.x, y = tonumber(cy) or pile.y,
-                            z = tonumber(cz) or 0, pile = pile, recs = {}, orders = o, ring = 0 }
-                byKey[k] = c
-                ordered[#ordered + 1] = c
-            end
-        end
-    end
-
     pile.cells = ordered
     pile.cellByKey = byKey
     pile._v2Ver = ver
@@ -1233,8 +1219,14 @@ function HZ.v2Cycle()
         local seats = 0
         local cells = pile.cells or {}
         for j = 1, #cells do
+            local c = cells[j]
+            -- 自愈：清掉「已经不在 HZ._orders 里」的僵尸订单条目。
+            -- 不清理的话这些幽灵占着餐位 → seats=0 → cand 永远为空 → 再也不派单
+            for z, o in pairs(c.orders) do
+                if not (HZ._orders and HZ._orders[z] == o) then c.orders[z] = nil end
+            end
             local n = 0
-            for _ in pairs(cells[j].orders) do n = n + 1 end
+            for _ in pairs(c.orders) do n = n + 1 end
             seats = seats + math.max(0, v2MaxEaters() - n)
         end
         pile.openSeats = seats
@@ -1271,9 +1263,16 @@ function HZ.v2Cycle()
             if onTgt then nGoal = nGoal + 1 end
         end
         local navAtt, navOk = HZ._navAtt or 0, HZ._navOk or 0
-        HZ._navAtt, HZ._navOk = 0, 0
-        HZ.log(string.format("v2: piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d d=[%.1f..%.1f]",
-            #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk,
+        local tickCnt, retCnt = HZ._tickCnt or 0, HZ._retCnt or 0
+        local nb, nc, bo, ns = HZ._cNoBody or 0, HZ._cNoCorpse or 0, HZ._cBone or 0, HZ._cNoSq or 0
+        HZ._navAtt, HZ._navOk, HZ._tickCnt, HZ._retCnt = 0, 0, 0, 0
+        HZ._cNoBody, HZ._cNoCorpse, HZ._cBone, HZ._cNoSq = 0, 0, 0, 0
+        local sn = (HZ._snap and HZ._snap.n) or 0
+        local cz, co, cb = HZ._candZ or 0, HZ._candSkipOrd or 0, HZ._candBest or 0
+        local seats = 0
+        for i = 1, #piles do seats = seats + (piles[i].openSeats or 0) end
+        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d bone=%d noSq=%d] d=[%.1f..%.1f]",
+            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, bo, ns,
             dmin > 1e8 and -1 or dmin, dmax))
     end
 
@@ -1309,8 +1308,11 @@ function HZ.v2Cycle()
         end
     end
 
+    HZ._candZ, HZ._candSkipOrd, HZ._candBest = 0, 0, 0
     for i = 1, snap.n do
         local z = snap.obj[i]
+        if z then HZ._candZ = HZ._candZ + 1 end
+        if z and (HZ._orders and HZ._orders[z]) then HZ._candSkipOrd = HZ._candSkipOrd + 1 end
         if z and not taken[z] and not (HZ._orders and HZ._orders[z]) then
             local x, y = snap.x[i], snap.y[i]
             local best, bestD = nil, nil
@@ -1325,6 +1327,7 @@ function HZ.v2Cycle()
                 end
             end
             if best then
+                HZ._candBest = (HZ._candBest or 0) + 1
                 best.cand[#best.cand + 1] = { z = z, x = x, y = y }
                 best.candSet[z] = true
             end
@@ -1523,6 +1526,7 @@ end
 
 -- 换目标：脚下 → 本格 → 本堆其他格 → 释放
 local function retargetOrRelease(z, ord, now)
+    HZ._retCnt = (HZ._retCnt or 0) + 1
     local pile, cell = ord.pile, ord.cell
     local nb, nrec, ncell
 
@@ -1573,6 +1577,7 @@ end
 
 -- ===================== 续单主函数 =====================
 function HZ.tickOrder(z, ord, now)
+    HZ._tickCnt = (HZ._tickCnt or 0) + 1
     if not z or not ord then return end
 
     -- ① 校验：死了 / 堆没了 / 目标尸体不可用
@@ -1589,11 +1594,18 @@ function HZ.tickOrder(z, ord, now)
         return
     end
 
-    local bodyOk = ord.body and HZ.corpses and HZ.corpses[ord.body]
-        and not (HZ.isBone and HZ.isBone(ord.body))
-    if bodyOk then
-        local okSq, sq = HZ.try("tickBodySq", function() return ord.body:getSquare() end)
-        bodyOk = okSq and sq ~= nil
+    -- 尸体是否还在：用桥的 orderFlags（bit3 = body 存在且没骨化），和 0.3.0 的 navOne 一致。
+    -- 不要拿 HZ.corpses 当判据 —— 那张表在 0.3.0 里根本没有维护者，永远是空表。
+    local bodyOk = false
+    if not ord.body then
+        HZ._cNoBody = (HZ._cNoBody or 0) + 1
+    else
+        local _, _, bodyAlive = orderFlags(z, ord.body)
+        if bodyAlive then
+            bodyOk = true
+        else
+            HZ._cNoCorpse = (HZ._cNoCorpse or 0) + 1
+        end
     end
     if not bodyOk then
         retargetOrRelease(z, ord, now)      -- 目标没了
