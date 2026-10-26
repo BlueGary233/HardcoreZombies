@@ -1585,7 +1585,7 @@ local function eatTick(z, ord, now)
         if ord.eatFails == 1 then
             local back = nil
             HZ.try("eatBack", function() back = z:getEatBodyTarget() end)
-            if back == nil then
+            if back == nil and HZ.debugEnabled and HZ.debugEnabled() then
                 local px, py, bx, by = -1, -1, -1, -1
                 HZ.try("eatPos", function() px, py = z:getX(), z:getY(); bx, by = ord.body:getX(), ord.body:getY() end)
                 HZ.log(string.format("eat reject uid=%s z=(%.1f,%.1f) body=(%.1f,%.1f) fails=%d",
@@ -1718,7 +1718,7 @@ function HZ.tickOrder(z, ord, now)
     if not okD or not d then d = 1e9 end
 
     -- 远单观测：d 特别大的订单，10 秒一条，确认是在接近还是在远离
-    if d and d > 15 and HZ.due("farOrd" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
+    if HZ.debugEnabled and HZ.debugEnabled() and d and d > 15 and HZ.due("farOrd" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
         local px, py, bx, by, bz = -1, -1, -1, -1, -1
         local tx, ty, tz, goalNone = -1, -1, -1, "?"
         HZ.try("farPos", function()
@@ -1750,7 +1750,8 @@ function HZ.tickOrder(z, ord, now)
     if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
 
     -- 站桩观测：没在吃、站着超过 5 秒的订单，10 秒打一条（含引擎进食目标）
-    if (not ord.eating) and (ord.stillMs or 0) > 5000
+    if HZ.debugEnabled and HZ.debugEnabled()
+        and (not ord.eating) and (ord.stillMs or 0) > 5000
         and HZ.due("stuck" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
         local et, px, py, bx, by = nil, -1, -1, -1, -1
         local gx, gy, gnone = -1, -1, "?"
@@ -1817,7 +1818,7 @@ function HZ.tickOrder(z, ord, now)
                 local pth = z:getPath2()
                 if pth then psz = pth:size() end
             end)
-            if (ord.navFail or 0) == 0 then
+            if (ord.navFail or 0) == 0 and HZ.debugEnabled and HZ.debugEnabled() then
                 HZ.log(string.format("selfGoal uid=%s d=%.1f pathSize=%d",
                     tostring(ord.uid), d, psz))
             end
