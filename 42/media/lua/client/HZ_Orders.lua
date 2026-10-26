@@ -1739,14 +1739,22 @@ function HZ.tickOrder(z, ord, now)
         end
 
         -- 引擎当前目标是不是我们给的那具尸体
+        -- 不能用 isTargetLocation：它内部是 targetX == x 的浮点全等比较，
+        -- 而 pathToLocationF 会把目标吸附到格子中心，尸体坐标是物体中心（如 2134.7），
+        -- 两者永远不相等 → onTarget 恒 false → 每 2 秒重下发一次 setDefaultState+path，
+        -- 丧尸被反复打断，看起来就在原地游荡。
         local onTarget = false
         local bx, by, bz = ord.body:getX(), ord.body:getY(), ord.body:getZ()
+        local tx, ty = nil, nil
         HZ.try("tickGoal", function()
             local pf = z:getPathFindBehavior2()
             if pf and not pf:isGoalNone() then
-                onTarget = (pf:isTargetLocation(bx, by, bz) == true)
+                tx, ty = pf:getTargetX(), pf:getTargetY()
             end
         end)
+        if tx and ty then
+            onTarget = (math.abs(tx - bx) < 0.75 and math.abs(ty - by) < 0.75)
+        end
 
         -- 目标对、但距离在变大：被追击目标接管了，抢回控制
         if onTarget and ord.lastD and d > ord.lastD + 1.0 then
@@ -1769,7 +1777,8 @@ function HZ.tickOrder(z, ord, now)
             HZ.try("tickNavChk", function()
                 local pf = z:getPathFindBehavior2()
                 if pf and not pf:isGoalNone() then
-                    accepted = (pf:isTargetLocation(bx, by, bz) == true)
+                    local atx, aty = pf:getTargetX(), pf:getTargetY()
+                    accepted = (atx ~= nil and math.abs(atx - bx) < 0.75 and math.abs(aty - by) < 0.75)
                 end
             end)
             if accepted then HZ._navOk = (HZ._navOk or 0) + 1 end
