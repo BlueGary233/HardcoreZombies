@@ -1306,14 +1306,15 @@ local function v2CellTurn(cell, now)
     end
 
     -- 维护本格订单：沿用旧的 navOne
-    if HZ.navOne then
+    local tickFn = HZ.tickOrder or HZ.navOne
+    if tickFn then
         local keys = {}
         for z in pairs(cell.orders) do keys[#keys + 1] = z end
         for i = 1, #keys do
             local z = keys[i]
             local ord = cell.orders[z]
             if z and ord and HZ._orders[z] == ord then
-                local ok = pcall(HZ.navOne, z, ord, now)
+                local ok = pcall(tickFn, z, ord, now)
                 if not ok and HZ._orders then HZ._orders[z] = nil end
             end
         end
@@ -1414,6 +1415,191 @@ function HZ.v2PickOther(pile, curCell, z)
         end
     end
     return nil
+end
+
+
+-- ============================================================================
+-- 续单：单一状态机（替代 navOne 的 17 条路径）
+--   行军 / 等位 / 到位 三段；一个 stillMs 计时器替代 osc / stuckNow / targetMiss / waitAt
+-- ============================================================================
+local EAT_R      = 1.0     -- 到位
+local WAIT_R     = 2.7     -- 等位区
+local MOVE_EPS   = 0.3     -- 位移小于它 = 没动
+local NAV_RETRY  = 2000    -- 没动 2s → 重下导航
+local GIVEUP_MS  = 4000    -- 没动 4s → 换目标 / 释放
+
+-- 到位：确认 → 重发 → 置位
+local function eatTick(z, ord, now)
+    if HZ.statsSatiated and HZ.statsSatiated(z) then
+        HZ.releaseOrder(z, ord, false)
+        return
+    end
+
+    local et = nil
+    HZ.try("tickEatTgt", function() et = z:getEatBodyTarget() end)
+
+    if et == ord.body then
+        if not ord.eating then
+            ord.eating = true
+            if HZ.statsEatStart then HZ.statsEatStart(z) end
+        end
+        return
+    end
+
+    if ord.eating then
+        ord.eating = false
+        if HZ.statsEatStop then HZ.statsEatStop(z) end
+    end
+
+    if (now - (ord.lastEatCmd or 0)) > 1000 then
+        HZ.try("tickEat", function()
+            z:setDefaultState()
+            z:setEatBodyTarget(ord.body, true)   -- force：绕 3 人上限
+            z:setForceEatingAnimation(true)
+        end)
+        ord.lastEatCmd = now
+    end
+end
+
+-- 换目标：脚下 → 本格 → 本堆其他格 → 释放
+local function retargetOrRelease(z, ord, now)
+    local pile, cell = ord.pile, ord.cell
+    local nb, nrec, ncell
+
+    if footBodyAt then nb = footBodyAt(z, pile) end
+
+    if not nb and cell then
+        for i = 1, #cell.recs do
+            local rec = cell.recs[i]
+            if rec ~= ord.rec then
+                local b = rec.body or (HZ.findBody and HZ.findBody(rec)) or nil
+                rec.body = b
+                if b and not (HZ.isBone and HZ.isBone(b)) then nb, nrec, ncell = b, rec, cell; break end
+            end
+        end
+    end
+
+    if not nb and HZ.v2PickOther and cell then
+        nb, nrec, ncell = HZ.v2PickOther(pile, cell, z)
+    end
+
+    if not nb then
+        HZ.releaseOrder(z, ord, false)
+        return
+    end
+
+    -- 餐位迁移（成对）
+    if ncell and ncell ~= cell then
+        if cell and cell.orders then cell.orders[z] = nil end
+        ncell.orders[z] = ord
+        ord.cell = ncell
+    end
+    if ord.rec and nrec and ord.rec ~= nrec then
+        ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1)
+        nrec.orders = (nrec.orders or 0) + 1
+    end
+
+    if ord.eating then
+        ord.eating = false
+        if HZ.statsEatStop then HZ.statsEatStop(z) end
+    end
+
+    ord.body, ord.rec = nb, nrec
+    ord.navX, ord.navY, ord.navBody = nil, nil, nil
+    ord.stillMs, ord.t = 0, now
+    ord.lastEatCmd = 0
+    HZ.try("retargetClear2", function() HZ.clearEat(z) end)
+end
+
+-- ===================== 续单主函数 =====================
+function HZ.tickOrder(z, ord, now)
+    if not z or not ord then return end
+
+    -- ① 校验：死了 / 堆没了 / 目标尸体不可用
+    local dead = false
+    if HZ_orderState then
+        local ok, st = pcall(HZ_orderState, z, nil)
+        dead = ok and (tonumber(st) or 1) % 2 >= 1
+    end
+    if dead or not ord.pile or ord.pile.dead then
+        if HZ._orders then HZ._orders[z] = nil end
+        if ord.pile and ord.pile.orders then ord.pile.orders[z] = nil end
+        if ord.cell and ord.cell.orders then ord.cell.orders[z] = nil end
+        HZ.try("tickClearBuff", function() HZ.refreshBuffs(z) end)
+        return
+    end
+
+    local bodyOk = ord.body and HZ.corpses and HZ.corpses[ord.body]
+        and not (HZ.isBone and HZ.isBone(ord.body))
+    if bodyOk then
+        local okSq, sq = HZ.try("tickBodySq", function() return ord.body:getSquare() end)
+        bodyOk = okSq and sq ~= nil
+    end
+    if not bodyOk then
+        retargetOrRelease(z, ord, now)      -- 目标没了
+        return
+    end
+
+    -- ② 距离
+    local okD, d = HZ.try("tickDist", function() return z:DistTo(ord.body) end)
+    if not okD or not d then d = 1e9 end
+
+    -- ③ 位移
+    local okP, x, y = HZ.try("tickPos", function() return z:getX(), z:getY() end)
+    local moved = false
+    if okP and x then
+        if ord.lastX then
+            moved = (math.abs(x - ord.lastX) + math.abs(y - ord.lastY)) >= MOVE_EPS
+        end
+        ord.lastX, ord.lastY = x, y
+    end
+    local dt = now - (ord.t or now)
+    if dt < 0 or dt > 5000 then dt = 0 end
+    ord.t = now
+    if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
+
+    -- ④ 行军
+    if d > WAIT_R then
+        if ord.eating then                     -- 吃着却被拖远了：先结算，再当行军处理
+            ord.eating = false
+            if HZ.statsEatStop then HZ.statsEatStop(z) end
+            HZ.try("tickLeaveTable", function() HZ.clearEat(z) end)
+        end
+
+        local hasGoal = false
+        HZ.try("tickGoal", function()
+            local pf = z:getPathFindBehavior2()
+            hasGoal = pf and not pf:isGoalNone()
+        end)
+
+        if not hasGoal or (ord.stillMs or 0) >= NAV_RETRY then
+            ord.navX, ord.navY = ord.body:getX(), ord.body:getY()
+            ord.navBody = ord.body
+            ord.navAt = now
+            HZ.try("tickNav", function() z:pathToLocationF(ord.navX, ord.navY, ord.body:getZ()) end)
+        end
+
+        if (ord.stillMs or 0) >= GIVEUP_MS then
+            retargetOrRelease(z, ord, now)
+        end
+        return
+    end
+
+    -- ⑤ 等位 / 挤住
+    if d > EAT_R then
+        if ord.eating then
+            ord.eating = false
+            if HZ.statsEatStop then HZ.statsEatStop(z) end
+            HZ.try("tickLeaveTable2", function() HZ.clearEat(z) end)
+        end
+        if (ord.stillMs or 0) >= GIVEUP_MS then
+            retargetOrRelease(z, ord, now)
+        end
+        return
+    end
+
+    -- ⑥ 到位
+    eatTick(z, ord, now)
 end
 
 -- 堆回收空格子（骨化后没有尸体了）
