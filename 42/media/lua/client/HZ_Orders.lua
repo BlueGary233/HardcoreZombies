@@ -544,14 +544,37 @@ function HZ.navOne(z, ord, now)
                     ord.targetMiss = 0
                 end
 
+                -- 目标偏离两拍：先重下导航（路径节点噪声会让 getTargetX 不等于终点，
+                -- 直接释放会造成"派单→释放→再派单"的抖动，丧尸原地打转）
+                -- 只有连续 8 拍（约 16 秒）都不对，才认定真被拉走、交还餐位
                 if (ord.targetMiss or 0) >= 2 then
                     if HZ.debugEnabled() then
-                        HZ.log(string.format("lure uid=%s nav=(%.1f,%.1f) target=(%.1f,%.1f) d=%.1f",
-                            tostring(ord.uid), ord.navX or -1, ord.navY or -1,
+                        HZ.log(string.format("nav drift uid=%s n=%d nav=(%.1f,%.1f) target=(%.1f,%.1f) d=%.1f",
+                            tostring(ord.uid), ord.targetMiss or 0, ord.navX or -1, ord.navY or -1,
                             tx or -1, ty or -1, d or -1))
                     end
-                    HZ.releaseOrder(z, ord, true)
-                    return
+
+                    -- 只要它还在往前走（位移 ≥ 0.3），这点偏差就是路径节点噪声，什么都不用做
+                    local progressed = (x and ord.lastX
+                        and (math.abs(x - ord.lastX) + math.abs(y - ord.lastY)) >= 0.3)
+
+                    if progressed then
+                        ord.targetMiss = 0
+                        ord.lastX, ord.lastY = x, y
+                        return
+                    elseif (ord.targetMiss or 0) >= 8 then
+                        HZ.releaseOrder(z, ord, true)
+                        return
+                    end
+
+                    if ord.targetMiss == 0 then return end
+
+                    ord.navX, ord.navY = body:getX(), body:getY()
+                    HZ.try("renav", function()
+                        z:pathToLocationF(ord.navX, ord.navY, body:getZ())
+                    end)
+                    ord.navAt = now
+                    ord.targetMiss = 0
                 end
 
                 -- ③ 真卡住：目标没偏离（走到这里说明目标一致），但位置只在一个小范围里来回波动
