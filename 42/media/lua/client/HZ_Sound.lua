@@ -152,8 +152,9 @@ HZ.emitPile = function(pile, now)
     -- 派单不在这里：tickOneDispatch 按 2s/排队数 全局轮转
 
 
-    pile.lastRadius = radius
-    pile.lastVolume = volume
+    -- 接单圆 = 实际声音圆：存夹紧后的值，两边用同一个数，不重复计算
+    pile.lastRadius = soundR
+    pile.lastVolume = soundV
 
     if HZ.debugEnabled() then
         log(string.format("emit (%d,%d) src=(%d,%d) n=%d age=%.2f r=%d v=%d lastAssign=%d",
