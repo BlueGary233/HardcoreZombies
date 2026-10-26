@@ -1381,7 +1381,8 @@ function HZ.v2Tick()
     local n = sched and #sched or 0
     if n == 0 then return end
 
-    local SLOTS = 8
+    -- 2 秒一圈；格子少于 8 个时减少槽位，否则同一格一圈会被轮到多次
+    local SLOTS = math.min(8, n)
     if not HZ.due("v2cell", 2000 / SLOTS) then return end
 
     V2.slot = ((V2.slot or 0) % SLOTS) + 1
@@ -1583,7 +1584,7 @@ function HZ.tickOrder(z, ord, now)
             end
         end)
 
-        if (not onTarget) and (now - (ord.navAt or 0)) > 1000 then
+        if not onTarget then
             -- 先打断当前状态（声音目标），再重新下令
             HZ.try("tickIdle", function() z:setDefaultState() end)
             ord.navX, ord.navY, ord.navZ = bx, by, bz
