@@ -1541,6 +1541,22 @@ local function eatTick(z, ord, now)
             ord.eating = false
             if HZ.statsEatStop then HZ.statsEatStop(z) end
         end
+
+        -- 引擎就是不接这个进食目标：记下来，连续失败 → 换尸体/换格。
+        -- 没有这一段的话，eatTick 会一秒一次永远重发，丧尸站在尸体上不吃也不换。
+        ord.eatFails = (ord.eatFails or 0) + 1
+        if ord.eatFails == 1 or ord.eatFails == 6 then
+            local back, si = nil, -999
+            HZ.try("eatBack", function() back = z:getEatBodyTarget() end)
+            HZ.try("eatSI", function() si = ord.body:getStaticMovingObjectIndex() end)
+            HZ.log(string.format("eat reject uid=%s d=%.2f back=%s si=%s fails=%d",
+                tostring(ord.uid), d or -1, tostring(back), tostring(si), ord.eatFails))
+        end
+        if ord.eatFails >= 6 then
+            ord.eatFails = 0
+            retargetOrRelease(z, ord, now)
+            return
+        end
         return
     end
 
