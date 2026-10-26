@@ -1672,10 +1672,19 @@ function HZ.tickOrder(z, ord, now)
 
     -- 远单观测：d 特别大的订单，10 秒一条，确认是在接近还是在远离
     if d and d > 15 and HZ.due("farOrd" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
-        local px, py, bx, by = -1, -1, -1, -1
-        HZ.try("farPos", function() px, py = z:getX(), z:getY(); bx, by = ord.body:getX(), ord.body:getY() end)
-        HZ.log(string.format("far order uid=%s d=%.1f z=(%.1f,%.1f) body=(%.1f,%.1f)",
-            tostring(ord.uid), d, px, py, bx, by))
+        local px, py, bx, by, bz = -1, -1, -1, -1, -1
+        local tx, ty, tz, goalNone = -1, -1, -1, "?"
+        HZ.try("farPos", function()
+            px, py = z:getX(), z:getY()
+            bx, by, bz = ord.body:getX(), ord.body:getY(), ord.body:getZ()
+        end)
+        HZ.try("farGoal", function()
+            local pf = z:getPathFindBehavior2()
+            goalNone = tostring(pf:isGoalNone())
+            tx, ty, tz = pf:getTargetX(), pf:getTargetY(), pf:getTargetZ()
+        end)
+        HZ.log(string.format("far order uid=%s d=%.1f z=(%.1f,%.1f) body=(%.1f,%.1f,%.3f) engTgt=(%.1f,%.1f,%.3f) none=%s",
+            tostring(ord.uid), d, px, py, bx, by, bz, tx, ty, tz, goalNone))
     end
 
     -- ③ 位移
