@@ -1790,6 +1790,20 @@ function HZ.tickOrder(z, ord, now)
             selfGoal = (math.abs(tx - x) < 0.75 and math.abs(ty - y) < 0.75)
         end
         if selfGoal and d > WAIT_R then
+            local psz = -1
+            HZ.try("pathSize", function()
+                local pth = z:getPath2()
+                if pth then psz = pth:size() end
+            end)
+            if (ord.navFail or 0) == 0 then
+                local st = "?"
+                HZ.try("stateName", function()
+                    local sm = z:getStateMachine()
+                    if sm then st = tostring(sm:getState()) end
+                end)
+                HZ.log(string.format("selfGoal uid=%s d=%.1f pathSize=%d state=%s",
+                    tostring(ord.uid), d, psz, st))
+            end
             ord.navFail = (ord.navFail or 0) + 1
             if ord.navFail >= 3 then
                 ord.navFail = 0
@@ -1802,9 +1816,9 @@ function HZ.tickOrder(z, ord, now)
         end
 
         if not onTarget then
-            -- 先打断当前状态（声音目标），再重新下令
-            HZ.try("tickIdle", function() z:setDefaultState() end)
-            if HZ_clearTarget then pcall(HZ_clearTarget, z) end
+            -- 0.3.0 的导航段只有一句 pathToLocationF：不 setDefaultState、不 clearTarget。
+            -- 那两步是【派单时】做的（bak 里 forceIdle 在 disp 里）。
+            -- 这里每拍再 kick 一次状态机，会把正在寻路的丧尸踢回游荡状态。
             ord.navX, ord.navY, ord.navZ = bx, by, bz
             ord.navBody = ord.body
             ord.navAt = now
