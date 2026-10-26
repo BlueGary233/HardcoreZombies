@@ -235,34 +235,26 @@ local function longBlockMs() return tonumber(HZ.opt.LongBlockMs) or 60000 end   
 
 -- 单个订单：导航 / 进食 / 卡住处理（不遍历，供队列调度逐个调用）
 -- 脚下这一格有没有能吃的：在本堆清单里、没骨化
--- pile.foods 的 uid → rec 索引。foods 变动时重建一次，之后 O(1)。
--- 没有它的话，脚下扫到 N 具尸体就要各扫一遍 foods（N × 堆尸体数）。
+-- 按 uid 在 pile.foods 里找记录。不建索引表：堆里最多一百多具，
+-- 线性扫一遍比维护一张镜像表便宜，也不会多一份数据要同步。
 local function recByUid(pile, uid)
-    local ver = pile._foodsVer or 0
-    if pile._uidVer ~= ver then
-        local m = {}
-        local foods = pile.foods
-        for i = 1, #foods do
-            local r = foods[i]
-            if r.uid then m[r.uid] = r end
-        end
-        pile._foodByUid = m
-        pile._uidVer = ver
+    if not pile or not uid or not pile.foods then return nil end
+    local foods = pile.foods
+    for i = 1, #foods do
+        if foods[i].uid == uid then return foods[i] end
     end
-    return pile._foodByUid[uid]
+    return nil
 end
 
--- 同一份 foods 的成员集合（派单时判断订单指向的 rec 是否还在）
-local function foodSet(pile)
-    local ver = pile._foodsVer or 0
-    if pile._setVer ~= ver then
-        local m = {}
-        local foods = pile.foods
-        for i = 1, #foods do m[foods[i]] = true end
-        pile._foodSet = m
-        pile._setVer = ver
+-- rec 是否还在这堆的清单里（不建集合表，直接扫）
+local function foodSet(pile, rec)
+    if not pile or not pile.foods then return false end
+    if rec == nil then return nil end
+    local foods = pile.foods
+    for i = 1, #foods do
+        if foods[i] == rec then return true end
     end
-    return pile._foodSet
+    return false
 end
 
 local function footBodyAt(z, pile)
@@ -946,7 +938,6 @@ function HZ.dispatchOne(pile, mo, nowMs, passLimit)
     local limit = passLimit or maxEaters
 
     -- 每格已有订单数：只遍历订单，不碰尸体（成员集合按版本缓存）
-    local inFoods = foodSet(pile)
     local cellOrders = {}
     for _, ord in pairs(pile.orders or {}) do
         local r = ord.rec
@@ -1345,11 +1336,10 @@ local function v2CellTurn(cell, now)
 
     -- 骨化 / 移除：rec 已经不在堆的 foods 里 → 摘掉；obj 骨化 → 摘掉
     -- 拿不到对象（未加载）→ 保留，本轮跳过
-    local fs = foodSet and foodSet(pile) or nil
     for i = #cell.recs, 1, -1 do
         local rec = cell.recs[i]
         local drop = false
-        if fs and not fs[rec] then
+        if not foodSet(pile, rec) then
             drop = true
         else
             local b = rec.body
@@ -1451,6 +1441,7 @@ local function v2CellTurn(cell, now)
         -- 引擎可能已经自己挂上了别的尸体（原版 AI 会自动找脚边尸体吃）。
         -- 不清掉的话，我们的订单指向 A，它却在 B 那里吃 / 往 B 走，距离越走越大。
         if HZ.clearEat then HZ.try("v2clearEat", function() HZ.clearEat(z) end) end
+        ord.faceNext = true                 -- 到位后朝尸体转一次身
         HZ.try("v2forceIdle", function() z:setDefaultState() end)
         if HZ_clearTarget then pcall(HZ_clearTarget, z) end
         HZ.refreshBuffs(z)
@@ -1522,6 +1513,10 @@ local GIVEUP_MS  = 4000    -- 没动 4s → 换目标 / 释放
 
 -- 到位：确认 → 重发 → 置位
 local function eatTick(z, ord, now)
+    if ord.faceNext then
+        ord.faceNext = false
+        HZ.try("eatFace", function() z:faceLocationF(ord.body:getX(), ord.body:getY()) end)
+    end
     if HZ.statsSatiated and HZ.statsSatiated(z) then
         HZ.releaseOrder(z, ord, false)
         return
@@ -1620,6 +1615,7 @@ local function retargetOrRelease(z, ord, now)
     end
 
     ord.body, ord.rec = nb, nrec
+    ord.faceNext = true                     -- 换目标后同样转一次
     ord.navX, ord.navY, ord.navBody = nil, nil, nil
     ord.stillMs, ord.t = 0, now
     ord.lastEatCmd = 0
