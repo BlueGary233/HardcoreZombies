@@ -56,6 +56,8 @@ end
 
 function HZ.refreshBuffs(z, pid)
     if not z then return end
+    -- v2：认领机制已废弃。旧存档里残留的 hz_pile 会让丧尸假"开饭+静音"，这里一律忽略。
+    if HZ.v2Active then pid = 0 end
     if pid == nil then pid = HZ.pileOf(z) end
 
     -- 认领的堆已经不存在（尸体吃光 / 区块卸载 / 重载后未重建）：
@@ -1070,6 +1072,7 @@ end
 -- ============================================================================
 local V2 = HZ.v2 or {}
 HZ.v2 = V2
+HZ.v2Active = true
 
 local function v2MaxEaters()
     return math.max(1, math.floor(tonumber(HZ.opt.MaxEaters) or 4))

@@ -671,6 +671,9 @@ end
 -- 绑定到堆轮转会让一轮走完还有丧尸没派单）。
 
 function HZ.tickPiles()
+    -- 补投：spawn / 扫格时拿不到 square 的尸体在这里重试（原来这个函数定义了却没人调）
+    if HZ.due("pending", HZ.emitIntervalMs()) then flushPendingFeed() end
+
     local n = #piles
     if n == 0 then return end
 
