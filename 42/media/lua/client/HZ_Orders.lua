@@ -1513,10 +1513,6 @@ local GIVEUP_MS  = 4000    -- 没动 4s → 换目标 / 释放
 
 -- 到位：确认 → 重发 → 置位
 local function eatTick(z, ord, now)
-    if ord.faceNext then
-        ord.faceNext = false
-        HZ.try("eatFace", function() z:faceLocationF(ord.body:getX(), ord.body:getY()) end)
-    end
     if HZ.statsSatiated and HZ.statsSatiated(z) then
         HZ.releaseOrder(z, ord, false)
         return
@@ -1634,6 +1630,9 @@ function HZ.tickOrder(z, ord, now)
         dead = ok and (tonumber(st) or 1) % 2 >= 1
     end
     if dead or not ord.pile or ord.pile.dead then
+        -- 和 releaseOrder 的数据语义一致（0.3.0 也是走 releaseOrder）：
+        -- 尸体名额 -1、三张表摘干净。区别是不对可能已销毁的对象调引擎方法。
+        if ord.rec then ord.rec.orders = math.max(0, (ord.rec.orders or 0) - 1) end
         if HZ._orders then HZ._orders[z] = nil end
         if ord.pile and ord.pile.orders then ord.pile.orders[z] = nil end
         if ord.cell and ord.cell.orders then ord.cell.orders[z] = nil end
@@ -1666,6 +1665,12 @@ function HZ.tickOrder(z, ord, now)
     if not bodyOk then
         retargetOrRelease(z, ord, now)      -- 目标没了
         return
+    end
+
+    -- 转向：0.3.0 在这里消费（只要有目标就转一次），不是等到开吃
+    if ord.faceNext then
+        ord.faceNext = false
+        HZ.try("faceOnce", function() z:faceLocationF(ord.body:getX(), ord.body:getY()) end)
     end
 
     -- ② 距离
@@ -1780,16 +1785,22 @@ function HZ.tickOrder(z, ord, now)
         -- 以前这里按 1.0 清进食（clearEat 里有 setDefaultState），
         -- 每 2 秒把丧尸从进食状态踢出来一次 → 站起来再跪下 = 深蹲。
         if ord.eating then
-            -- 0.3.0 的 keepD：进食中、且还在 1.2 格内 → 继续走进食流程。
-            -- 重发入口在 eatTick 里（et==body 就什么都不做；et==nil 才重发）。
-            -- 这里直接 return 会漏掉“引擎一轮 30~60 秒吃完、目标被清空”的情况，
-            -- 表现就是吃一轮之后站着不动。
             if d <= EAT_R + 0.2 then
+                -- 0.3.0 的 keepD：进食中且还在 1.2 格内 → 继续走 eatTick。
+                -- 重发入口在 eatTick 里（et==body 什么都不做；et==nil 才重发），
+                -- 少了这条，引擎一轮 30~60 秒吃完清空目标后就没人重发了。
                 eatTick(z, ord, now)
+            else
+                -- 真的离桌了：结算 + 清进食状态（0.3.0 的 else 分支就是这么做的）
+                ord.eating = false
+                if HZ.statsEatStop then HZ.statsEatStop(z) end
+                HZ.try("leaveFar", function() HZ.clearEat(z) end)
             end
             return
         end
-        if (ord.stillMs or 0) >= GIVEUP_MS then
+        -- 等位区 1.0~2.7：0.3.0 用 atTable 排除，不把它当卡住。
+        -- 这里保留“挤不进就换”的功能，但把阈值放长，避免反复换格。
+        if (ord.stillMs or 0) >= 12000 then
             retargetOrRelease(z, ord, now)
         end
         return
