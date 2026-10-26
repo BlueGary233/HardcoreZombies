@@ -177,6 +177,15 @@ HZ.tickList = {
 -- 热重载 / 读档时调用。原则：凡是「临时表 / Java 桥拿来的数据 / 节拍时间戳」
 -- 一律丢弃。旧对象引用残留会导致「已有订单」「查不到条目」这类死锁。
 function HZ.clearRuntimeState()
+    -- 诊断：重载前到底有没有订单、modData 清了几只
+    local nOrd, nFrame, nCleared = 0, 0, 0
+    for _ in pairs(HZ._orders or {}) do nOrd = nOrd + 1 end
+    if HZ_zombieFrame then
+        local ok, d = pcall(HZ_zombieFrame)
+        if ok and d then nFrame = tonumber(d.n) or 0 end
+    end
+    print(string.format("[HZ] clearRuntimeState: ordersBefore=%d zombFrame=%d", nOrd, nFrame))
+
     HZ._zstats         = {}
     HZ._byUid          = {}
     HZ._orders         = {}
