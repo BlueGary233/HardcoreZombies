@@ -1723,16 +1723,22 @@ function HZ.tickOrder(z, ord, now)
             tostring(et), px, py, bx, by))
     end
 
-    -- ④ 行军
-    if d > WAIT_R then
-        if ord.eating then                     -- 吃着却被拖远了：先结算，再当行军处理
+    -- ④ 距离 > 1.0：要么在赶路，要么在桌边等位 —— 两种情况都要保证导航活着。
+    -- 旧代码就是这么做的（near 为假就走导航分支），我之前把 1.0~2.7 单独劈成
+    -- “等位区”且不发导航，结果丧尸卡在 1.5~2.2 格原地不动。
+    if d > EAT_R then
+        if ord.eating then
+            if d <= EAT_R + 0.2 then
+                eatTick(z, ord, now)      -- 1.0~1.2 继续吃（keepD）
+                return
+            end
+            -- 真的离桌：结算 + 清进食状态
             ord.eating = false
             if HZ.statsEatStop then HZ.statsEatStop(z) end
-            HZ.try("tickLeaveTable", function() HZ.clearEat(z) end)
+            HZ.try("leaveFar", function() HZ.clearEat(z) end)
         end
 
-        -- 引擎当前目标是不是我们给的那具尸体（不是"有没有目标"）
-        -- 被声音/玩家拉走时 isGoalNone 是 false，但目标不是尸体 —— 必须抢回来
+        -- 引擎当前目标是不是我们给的那具尸体
         local onTarget = false
         local bx, by, bz = ord.body:getX(), ord.body:getY(), ord.body:getZ()
         HZ.try("tickGoal", function()
@@ -1742,9 +1748,7 @@ function HZ.tickOrder(z, ord, now)
             end
         end)
 
-        -- 目标坐标是对的、引擎也说在走，但距离反而在变大：
-        -- 说明它被"追击目标"（声音/玩家/游荡）接管了，寻路目标只是挂着。
-        -- 旧代码只在 isGoalNone / 偏离计数时才重发，抓不到这种情况。
+        -- 目标对、但距离在变大：被追击目标接管了，抢回控制
         if onTarget and ord.lastD and d > ord.lastD + 1.0 then
             onTarget = false
             HZ._cFarAway = (HZ._cFarAway or 0) + 1
@@ -1761,7 +1765,6 @@ function HZ.tickOrder(z, ord, now)
             HZ._navAtt = (HZ._navAtt or 0) + 1
             HZ.try("tickNav", function() z:pathToLocationF(bx, by, bz) end)
 
-            -- 下发后立刻回读：引擎到底有没有接这个目标
             local accepted = false
             HZ.try("tickNavChk", function()
                 local pf = z:getPathFindBehavior2()
@@ -1772,35 +1775,9 @@ function HZ.tickOrder(z, ord, now)
             if accepted then HZ._navOk = (HZ._navOk or 0) + 1 end
         end
 
-        if (ord.stillMs or 0) >= GIVEUP_MS then
-            retargetOrRelease(z, ord, now)
-        end
-        return
-    end
-
-    -- ⑤ 等位 / 挤住
-    if d > EAT_R then
-        -- 正在吃的丧尸：一个字都别碰。
-        -- 距离是到尸体格中心的，斜对角站位就是 1.41 格，
-        -- 以前这里按 1.0 清进食（clearEat 里有 setDefaultState），
-        -- 每 2 秒把丧尸从进食状态踢出来一次 → 站起来再跪下 = 深蹲。
-        if ord.eating then
-            if d <= EAT_R + 0.2 then
-                -- 0.3.0 的 keepD：进食中且还在 1.2 格内 → 继续走 eatTick。
-                -- 重发入口在 eatTick 里（et==body 什么都不做；et==nil 才重发），
-                -- 少了这条，引擎一轮 30~60 秒吃完清空目标后就没人重发了。
-                eatTick(z, ord, now)
-            else
-                -- 真的离桌了：结算 + 清进食状态（0.3.0 的 else 分支就是这么做的）
-                ord.eating = false
-                if HZ.statsEatStop then HZ.statsEatStop(z) end
-                HZ.try("leaveFar", function() HZ.clearEat(z) end)
-            end
-            return
-        end
-        -- 等位区 1.0~2.7：0.3.0 用 atTable 排除，不把它当卡住。
-        -- 这里保留“挤不进就换”的功能，但把阈值放长，避免反复换格。
-        if (ord.stillMs or 0) >= 12000 then
+        -- 放弃换目标：桌边等位给足 12 秒（挤不进去才换），路程上 4 秒不动就换
+        local limit = (d <= WAIT_R) and 12000 or GIVEUP_MS
+        if (ord.stillMs or 0) >= limit then
             retargetOrRelease(z, ord, now)
         end
         return
