@@ -1704,6 +1704,20 @@ function HZ.tickOrder(z, ord, now)
     ord.t = now
     if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
 
+    -- 站桩观测：没在吃、站着超过 5 秒的订单，10 秒打一条（含引擎进食目标）
+    if (not ord.eating) and (ord.stillMs or 0) > 5000
+        and HZ.due("stuck" .. tostring(HZ.uidOf and HZ.uidOf(z) or z), 10000) then
+        local et, px, py, bx, by = nil, -1, -1, -1, -1
+        HZ.try("stuckInfo", function()
+            et = z:getEatBodyTarget()
+            px, py = z:getX(), z:getY()
+            bx, by = ord.body:getX(), ord.body:getY()
+        end)
+        HZ.log(string.format("stuck uid=%s d=%.1f still=%dms fails=%d et=%s z=(%.1f,%.1f) body=(%.1f,%.1f)",
+            tostring(ord.uid), d, math.floor(ord.stillMs or 0), ord.eatFails or 0,
+            tostring(et), px, py, bx, by))
+    end
+
     -- ④ 行军
     if d > WAIT_R then
         if ord.eating then                     -- 吃着却被拖远了：先结算，再当行军处理

@@ -240,8 +240,10 @@ print("[HZ_Loader] installed")
 -- ===================== 调试入口（只注册一次）=====================
 -- 注意：这段必须在 reloadMod 外面。放在函数里面的话，每次重载都会再注册一个
 -- OnTick / OnKeyStartPressed，按一次 0 会触发 N 次重载，游戏直接卡死。
-if not HZ._loaderInstalled then
-    HZ._loaderInstalled = true
+-- 注意：文件顶部已经用 HZ._loaderInstalled 挡住重复加载并把它置 true 了，
+-- 这里必须用另一个标志，否则这段永远是死代码（踩过一次）。
+if not HZ._hotkeyInstalled then
+    HZ._hotkeyInstalled = true
     print("[HZ] hotkey installed (key0)")
 
     -- 调试入口：0 键热重载 + 文件的看门狗（Loader 不在重载列表，注册一次永久有效）
