@@ -1605,8 +1605,8 @@ function HZ.tickOrder(z, ord, now)
     else
         local _, _, bodyAlive = orderFlags(z, ord.body)
         local recOk = true
-        if ord.rec and recByUid then
-            recOk = (recByUid(pile, ord.rec.uid) ~= nil)
+        if ord.rec and recByUid and ord.pile then
+            recOk = (recByUid(ord.pile, ord.rec.uid) ~= nil)
         end
         if bodyAlive and recOk then
             bodyOk = true
