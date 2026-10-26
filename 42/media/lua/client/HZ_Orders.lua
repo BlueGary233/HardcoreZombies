@@ -125,6 +125,8 @@ function HZ.releasePileClaims(pile)
     if not pile or not pile.pid then return end
     local snap = HZ._snap
     if not snap then return end
+
+
     for i = 1, snap.n do
         local z = snap.obj[i]
         if z and HZ.pileOf(z) == pile.pid then HZ.leaveQueue(z) end
@@ -1184,6 +1186,20 @@ local function v2BuildCells(pile)
         end
     end
 
+    -- 关键：尸体吃光/骨化后格子会从 foods 里消失，但它的订单可能还在。
+    -- 这类格子必须留在调度序列里，否则订单没人维护（丧尸永远站着）
+    if pile.cellOrders then
+        for k, o in pairs(pile.cellOrders) do
+            if next(o) ~= nil and not byKey[k] then
+                local cx, cy, cz = string.match(k, "(-?%d+):(-?%d+):(-?%d+)")
+                local c = { key = k, x = tonumber(cx) or pile.x, y = tonumber(cy) or pile.y,
+                            z = tonumber(cz) or 0, pile = pile, recs = {}, orders = o, ring = 0 }
+                byKey[k] = c
+                ordered[#ordered + 1] = c
+            end
+        end
+    end
+
     pile.cells = ordered
     pile.cellByKey = byKey
     pile._v2Ver = ver
@@ -1225,6 +1241,41 @@ function HZ.v2Cycle()
     end
 
     if not snap then return end
+
+    -- 诊断：每 5 秒一行，看订单/可接单/到位/在吃的数量
+    if HZ.debugEnabled and HZ.debugEnabled() and HZ.due("v2dbg", 5000) then
+        local cells, nOrder, nCand, nNear, nEat = 0, 0, 0, 0, 0
+        for i = 1, #piles do
+            local pl = piles[i]
+            cells = cells + #(pl.cells or {})
+            nCand = nCand + #(pl.cand or {})
+        end
+        local dmin, dmax, nWait, nGoal = 1e9, 0, 0, 0
+        for z, ord in pairs(HZ._orders or {}) do
+            nOrder = nOrder + 1
+            if ord.eating then nEat = nEat + 1 end
+            local okD, d = HZ.try("dbgDist2", function() return z:DistTo(ord.body) end)
+            if okD and d then
+                dmin = math.min(dmin, d)
+                dmax = math.max(dmax, d)
+                if d <= 1.0 then nNear = nNear + 1 end
+                if d <= 2.7 then nWait = nWait + 1 end
+            end
+            local onTgt = false
+            HZ.try("dbgGoal", function()
+                local pf = z:getPathFindBehavior2()
+                if pf and not pf:isGoalNone() then
+                    onTgt = (pf:isTargetLocation(ord.body:getX(), ord.body:getY(), ord.body:getZ()) == true)
+                end
+            end)
+            if onTgt then nGoal = nGoal + 1 end
+        end
+        local navAtt, navOk = HZ._navAtt or 0, HZ._navOk or 0
+        HZ._navAtt, HZ._navOk = 0, 0
+        HZ.log(string.format("v2: piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d d=[%.1f..%.1f]",
+            #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk,
+            dmin > 1e8 and -1 or dmin, dmax))
+    end
 
     -- 室内堆：按房间格拉人（墙挡气味，不能用半径，否则会把墙外的丧尸叫进来）
     local taken = {}
@@ -1369,6 +1420,7 @@ local function v2CellTurn(cell, now)
         rec.orders = (rec.orders or 0) + 1
 
         HZ.try("v2forceIdle", function() z:setDefaultState() end)
+        if HZ_clearTarget then pcall(HZ_clearTarget, z) end
         HZ.refreshBuffs(z)
 
         free = free - 1
@@ -1589,10 +1641,22 @@ function HZ.tickOrder(z, ord, now)
         if not onTarget then
             -- 先打断当前状态（声音目标），再重新下令
             HZ.try("tickIdle", function() z:setDefaultState() end)
+            if HZ_clearTarget then pcall(HZ_clearTarget, z) end
             ord.navX, ord.navY, ord.navZ = bx, by, bz
             ord.navBody = ord.body
             ord.navAt = now
+            HZ._navAtt = (HZ._navAtt or 0) + 1
             HZ.try("tickNav", function() z:pathToLocationF(bx, by, bz) end)
+
+            -- 下发后立刻回读：引擎到底有没有接这个目标
+            local accepted = false
+            HZ.try("tickNavChk", function()
+                local pf = z:getPathFindBehavior2()
+                if pf and not pf:isGoalNone() then
+                    accepted = (pf:isTargetLocation(bx, by, bz) == true)
+                end
+            end)
+            if accepted then HZ._navOk = (HZ._navOk or 0) + 1 end
         end
 
         if (ord.stillMs or 0) >= GIVEUP_MS then
