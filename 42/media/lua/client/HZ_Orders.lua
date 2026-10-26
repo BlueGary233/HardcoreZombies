@@ -1291,18 +1291,19 @@ local function v2CellTurn(cell, now)
     local fs = foodSet and foodSet(pile) or nil
     for i = #cell.recs, 1, -1 do
         local rec = cell.recs[i]
+        local drop = false
         if fs and not fs[rec] then
-            cell.recs[i] = nil
+            drop = true
         else
             local b = rec.body
             if not b then
                 b = (HZ.findBody and HZ.findBody(rec)) or nil
                 rec.body = b
             end
-            if b and HZ.isBone and HZ.isBone(b) then
-                cell.recs[i] = nil
-            end
+            if b and HZ.isBone and HZ.isBone(b) then drop = true end
         end
+        -- 必须 table.remove：直接置 nil 会在数组里留洞，#cell.recs 之后就不可靠了
+        if drop then table.remove(cell.recs, i) end
     end
 
     -- 维护本格订单：沿用旧的 navOne
@@ -1334,7 +1335,7 @@ local function v2CellTurn(cell, now)
     local rec, body
     for i = 1, #cell.recs do
         local r = cell.recs[i]
-        if r.body then rec, body = r, r.body; break end
+        if r and r.body then rec, body = r, r.body; break end
     end
     if not rec then return end
 
@@ -1411,9 +1412,10 @@ function HZ.v2PickOther(pile, curCell, z)
             if n < v2MaxEaters() then
                 for j = 1, #c.recs do
                     local rec = c.recs[j]
-                    local b = rec.body or (HZ.findBody and HZ.findBody(rec)) or nil
+                    local b = rec and (rec.body or (HZ.findBody and HZ.findBody(rec)) or nil)
                     rec.body = b
-                    if b and not (HZ.isBone and HZ.isBone(b)) then
+                    if rec and b and not (HZ.isBone and HZ.isBone(b)) then
+                        rec.body = b
                         return b, rec, c
                     end
                 end
@@ -1477,7 +1479,7 @@ local function retargetOrRelease(z, ord, now)
     if not nb and cell then
         for i = 1, #cell.recs do
             local rec = cell.recs[i]
-            if rec ~= ord.rec then
+            if rec and rec ~= ord.rec then
                 local b = rec.body or (HZ.findBody and HZ.findBody(rec)) or nil
                 rec.body = b
                 if b and not (HZ.isBone and HZ.isBone(b)) then nb, nrec, ncell = b, rec, cell; break end
