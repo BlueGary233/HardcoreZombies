@@ -242,10 +242,17 @@ print("[HZ_Loader] installed")
 -- OnTick / OnKeyStartPressed，按一次 0 会触发 N 次重载，游戏直接卡死。
 if not HZ._loaderInstalled then
     HZ._loaderInstalled = true
+    print("[HZ] hotkey installed (key0)")
 
     -- 调试入口：0 键热重载 + 文件的看门狗（Loader 不在重载列表，注册一次永久有效）
     Events.OnKeyStartPressed.Add(function(key)
-        if key == Keyboard.KEY_0 and HZ.reloadMod then pcall(HZ.reloadMod) end
+        local k = tonumber(key) or -1
+        print("[HZ] key pressed key=" .. tostring(key) .. " KEY_0=" .. tostring(Keyboard.KEY_0))
+        -- 11 = LWJGL 主键盘 0；48 = ASCII '0'；82 = 小键盘 0。三个都收，省得再猜键值
+        if (k == 11 or k == 48 or k == 82) and HZ.reloadMod then
+            print("[HZ] reload key hit -> reloadMod")
+            pcall(HZ.reloadMod)
+        end
     end)
 
     Events.OnTick.Add(function()

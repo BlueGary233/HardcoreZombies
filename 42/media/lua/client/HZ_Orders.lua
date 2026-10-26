@@ -1448,6 +1448,9 @@ local function v2CellTurn(cell, now)
         cell.orders[z] = ord
         rec.orders = (rec.orders or 0) + 1
 
+        -- 引擎可能已经自己挂上了别的尸体（原版 AI 会自动找脚边尸体吃）。
+        -- 不清掉的话，我们的订单指向 A，它却在 B 那里吃 / 往 B 走，距离越走越大。
+        if HZ.clearEat then HZ.try("v2clearEat", function() HZ.clearEat(z) end) end
         HZ.try("v2forceIdle", function() z:setDefaultState() end)
         if HZ_clearTarget then pcall(HZ_clearTarget, z) end
         HZ.refreshBuffs(z)
@@ -1767,6 +1770,13 @@ function HZ.tickOrder(z, ord, now)
         -- 以前这里按 1.0 清进食（clearEat 里有 setDefaultState），
         -- 每 2 秒把丧尸从进食状态踢出来一次 → 站起来再跪下 = 深蹲。
         if ord.eating then
+            -- 0.3.0 的 keepD：进食中、且还在 1.2 格内 → 继续走进食流程。
+            -- 重发入口在 eatTick 里（et==body 就什么都不做；et==nil 才重发）。
+            -- 这里直接 return 会漏掉“引擎一轮 30~60 秒吃完、目标被清空”的情况，
+            -- 表现就是吃一轮之后站着不动。
+            if d <= EAT_R + 0.2 then
+                eatTick(z, ord, now)
+            end
             return
         end
         if (ord.stillMs or 0) >= GIVEUP_MS then
