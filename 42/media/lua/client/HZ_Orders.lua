@@ -1168,14 +1168,46 @@ function HZ.v2Cycle()
 
     if not snap then return end
 
+    -- 室内堆：按房间格拉人（墙挡气味，不能用半径，否则会把墙外的丧尸叫进来）
+    local taken = {}
+    for i = 1, #piles do
+        local pile = piles[i]
+        if pile.indoor and pile.room then
+            local list = pile.room:getSquares()
+            if list then
+                for k = 0, list:size() - 1 do
+                    local sq = list:get(k)
+                    local mos = sq and sq:getMovingObjects()
+                    if mos then
+                        for m = 0, mos:size() - 1 do
+                            local z = mos:get(m)
+                            if z and instanceof(z, "IsoZombie")
+                               and not (HZ._orders and HZ._orders[z])
+                               and not taken[z] then
+                                local dead = false
+                                HZ.try("roomDead", function() dead = z:isDead() end)
+                                if not dead then
+                                    local zx, zy = z:getX(), z:getY()
+                                    pile.cand[#pile.cand + 1] = { z = z, x = zx, y = zy }
+                                    pile.candSet[z] = true
+                                    taken[z] = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     for i = 1, snap.n do
         local z = snap.obj[i]
-        if z and not (HZ._orders and HZ._orders[z]) then
+        if z and not taken[z] and not (HZ._orders and HZ._orders[z]) then
             local x, y = snap.x[i], snap.y[i]
             local best, bestD = nil, nil
             for k = 1, #piles do
                 local pile = piles[k]
-                if not pile.dead and (pile.openSeats or 0) > 0 then
+                if (not pile.dead) and (not pile.indoor) and (pile.openSeats or 0) > 0 then
                     local mx, my = pile.sourceX or pile.x, pile.sourceY or pile.y
                     local R = tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
                     local dx, dy = x - mx, y - my
