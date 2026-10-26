@@ -1261,7 +1261,7 @@ function HZ.v2Cycle()
         local nb, nc, bo, ns = HZ._cNoBody or 0, HZ._cNoCorpse or 0, HZ._cBone or 0, HZ._cNoSq or 0
         HZ._navAtt, HZ._navOk, HZ._tickCnt, HZ._retCnt = 0, 0, 0, 0
         HZ._cNoBody, HZ._cNoCorpse, HZ._cBone, HZ._cNoSq, HZ._cRecGone = 0, 0, 0, 0, 0
-        HZ._cNoRec, HZ._cNoCand = 0, 0
+        HZ._cNoRec, HZ._cNoCand, HZ._cNoPile, HZ._cOutR, HZ._cOdd = 0, 0, 0, 0, 0
         local sn = (HZ._snap and HZ._snap.n) or 0
         local cz, co, cb = HZ._candZ or 0, HZ._candSkipOrd or 0, HZ._candBest or 0
         local seats = 0
@@ -1271,14 +1271,15 @@ function HZ.v2Cycle()
         for i = 1, #piles do
             local p = piles[i]
             local seats = p.openSeats or 0
-            pl[#pl + 1] = string.format("%d:%d in=%s seats=%d cand=%d cells=%d",
+            pl[#pl + 1] = string.format("%d:%d in=%s seats=%d cand=%d cells=%d R=%s src=(%s,%s)",
                 math.floor(p.x or 0), math.floor(p.y or 0),
-                tostring(p.indoor == true), seats, #(p.cand or {}), #(p.cells or {}))
+                tostring(p.indoor == true), seats, #(p.cand or {}), #(p.cells or {}),
+                tostring(p.lastRadius), tostring(p.sourceX), tostring(p.sourceY))
         end
         if #pl > 0 then HZ.log("piles " .. table.concat(pl, " | ")) end
 
-        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d recGone=%d bone=%d noSq=%d noRec=%d noCand=%d] d=[%.1f..%.1f]",
-            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, (HZ._cRecGone or 0), bo, ns, (HZ._cNoRec or 0), (HZ._cNoCand or 0),
+        HZ.log(string.format("v2: snap=%d seats=%d candZ=%d skipOrd=%d got=%d piles=%d cells=%d orders=%d cand=%d near=%d wait=%d eating=%d onGoal=%d nav=%d/%d tick=%d ret=%d bad[noBody=%d noCorpse=%d recGone=%d bone=%d noSq=%d noRec=%d noCand=%d noPile=%d outR=%d odd=%d] d=[%.1f..%.1f]",
+            sn, seats, cz, co, cb, #piles, cells, nOrder, nCand, nNear, nWait, nEat, nGoal, navAtt, navOk, tickCnt, retCnt, nb, nc, (HZ._cRecGone or 0), bo, ns, (HZ._cNoRec or 0), (HZ._cNoCand or 0), (HZ._cNoPile or 0), (HZ._cOutR or 0), (HZ._cOdd or 0),
             dmin > 1e8 and -1 or dmin, dmax))
     end
 
@@ -1330,6 +1331,27 @@ function HZ.v2Cycle()
                     local dx, dy = x - mx, y - my
                     local d = dx * dx + dy * dy
                     if d <= R * R and (not bestD or d < bestD) then best, bestD = pile, d end
+                end
+            end
+            if not best then
+                -- 没进任何候选表：区分「所有堆都满座」和「都超半径」
+                local anySeat, anyRange = false, false
+                for k = 1, #piles do
+                    local pp = piles[k]
+                    if (not pp.dead) and (not pp.indoor) and (pp.openSeats or 0) > 0 then
+                        anySeat = true
+                        local mx, my = pp.sourceX or pp.x, pp.sourceY or pp.y
+                        local R = tonumber(pp.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
+                        local dx, dy = x - mx, y - my
+                        if dx * dx + dy * dy <= R * R then anyRange = true break end
+                    end
+                end
+                if not anySeat then
+                    HZ._cNoPile = (HZ._cNoPile or 0) + 1
+                elseif not anyRange then
+                    HZ._cOutR = (HZ._cOutR or 0) + 1
+                else
+                    HZ._cOdd = (HZ._cOdd or 0) + 1     -- 有座位也在半径内却没进候选
                 end
             end
             if best then
@@ -1796,13 +1818,8 @@ function HZ.tickOrder(z, ord, now)
                 if pth then psz = pth:size() end
             end)
             if (ord.navFail or 0) == 0 then
-                local st = "?"
-                HZ.try("stateName", function()
-                    local sm = z:getStateMachine()
-                    if sm then st = tostring(sm:getState()) end
-                end)
-                HZ.log(string.format("selfGoal uid=%s d=%.1f pathSize=%d state=%s",
-                    tostring(ord.uid), d, psz, st))
+                HZ.log(string.format("selfGoal uid=%s d=%.1f pathSize=%d",
+                    tostring(ord.uid), d, psz))
             end
             ord.navFail = (ord.navFail or 0) + 1
             if ord.navFail >= 3 then
@@ -1815,10 +1832,12 @@ function HZ.tickOrder(z, ord, now)
             ord.navFail = 0
         end
 
-        if not onTarget then
-            -- 0.3.0 的导航段只有一句 pathToLocationF：不 setDefaultState、不 clearTarget。
-            -- 那两步是【派单时】做的（bak 里 forceIdle 在 disp 里）。
-            -- 这里每拍再 kick 一次状态机，会把正在寻路的丧尸踢回游荡状态。
+        if not onTarget and (now - (ord.navAt or 0)) > 1500 then
+            -- IsoZombie.pathToLocationF 的字节码：
+            --   if (allowRepathDelay > 0 && (当前是 PathFindState/WalkTowardState/WalkTowardNetworkState)) return;
+            -- 也就是说：正在走的时候再下发会被【直接丢弃】。
+            -- 想纠正目标，必须先把状态踢出这三个，再下发，否则永远改不掉。
+            HZ.try("navKick", function() z:setDefaultState() end)
             ord.navX, ord.navY, ord.navZ = bx, by, bz
             ord.navBody = ord.body
             ord.navAt = now
