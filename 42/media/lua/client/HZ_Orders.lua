@@ -1627,6 +1627,10 @@ function HZ.v2PruneCells(pile)
         if #c.recs == 0 and next(c.orders) == nil then
             table.remove(cells, i)
             if pile.cellByKey then pile.cellByKey[c.key] = nil end
+            -- 订单表的 key 表也一起回收，否则重建时会一直累积空表
+            if pile.cellOrders and next(pile.cellOrders[c.key] or {}) == nil then
+                pile.cellOrders[c.key] = nil
+            end
         end
     end
 end
