@@ -1498,10 +1498,15 @@ local function eatTick(z, ord, now)
         return
     end
 
-    local et = nil
-    HZ.try("tickEatTgt", function() et = z:getEatBodyTarget() end)
+    -- 是否真的在吃：用引擎的 isEatingOther（吃状态 + 目标一致），
+    -- 不能用 getEatBodyTarget —— 那个字段在进食状态结束后不会被清，
+    -- 于是我们会以为它还在吃，从此不再重发指令（表现：吃两口就停）。
+    local eatingNow = false
+    HZ.try("tickIsEating", function()
+        if ord.body then eatingNow = (z:isEatingOther(ord.body) == true) end
+    end)
 
-    if et == ord.body then
+    if eatingNow then
         if not ord.eating then
             ord.eating = true
             if HZ.statsEatStart then HZ.statsEatStart(z) end
@@ -1518,6 +1523,9 @@ local function eatTick(z, ord, now)
         HZ.try("tickEat", function()
             z:setDefaultState()
             z:setEatBodyTarget(ord.body, true)   -- force：绕 3 人上限
+            -- 引擎的原生续吃入口：updateEatBodyTarget 只认 bodyToEat
+            -- （bodyToEat && 处于 idle && DistToSquared ≤ 1.0 && 同层 → 自动重挂）
+            z:setBodyToEat(ord.body)
             z:setForceEatingAnimation(true)
         end)
         ord.lastEatCmd = now
