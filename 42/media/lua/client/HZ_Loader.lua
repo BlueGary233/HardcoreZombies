@@ -237,50 +237,46 @@ HZ.reloadCfg()
 
 print("[HZ_Loader] installed")
 
--- ===================== 调试入口（只注册一次）=====================
--- 注意：这段必须在 reloadMod 外面。放在函数里面的话，每次重载都会再注册一个
--- OnTick / OnKeyStartPressed，按一次 0 会触发 N 次重载，游戏直接卡死。
--- 注意：文件顶部已经用 HZ._loaderInstalled 挡住重复加载并把它置 true 了，
--- 这里必须用另一个标志，否则这段永远是死代码（踩过一次）。
-if not HZ._hotkeyInstalled then
-    HZ._hotkeyInstalled = true
-    print("[HZ] hotkey installed (key0)")
+-- ===================== 调试入口 =====================
+-- 0.3.0 的做法：注册写在文件作用域（reloadMod 外面）。文件顶部有
+-- `if HZ._loaderInstalled then return end`，重载/重复加载时整个文件直接 return，
+-- 所以这里的注册天然只发生一次 —— 不需要第二个标志。
+Events.OnKeyStartPressed.Add(function(key)
+    HZ.try("keyPressed", function() HZ.onKeyPressed(key) end)
+end)
 
-    -- 调试入口：0 键热重载 + 文件的看门狗（Loader 不在重载列表，注册一次永久有效）
-    Events.OnKeyStartPressed.Add(function(key)
-        local k = tonumber(key) or -1
-        print("[HZ] key pressed key=" .. tostring(key) .. " KEY_0=" .. tostring(Keyboard.KEY_0))
-        -- 11 = LWJGL 主键盘 0；48 = ASCII '0'；82 = 小键盘 0。三个都收，省得再猜键值
-        if (k == 11 or k == 48 or k == 82) and HZ.reloadMod then
-            print("[HZ] reload key hit -> reloadMod")
-            pcall(HZ.reloadMod)
-        end
-    end)
+-- 文件看门狗：改 Lua/HZ_reload.txt 的内容即触发重载
+Events.OnTick.Add(function()
+    local now = getTimestampMs()
+    if now < (HZ._flagNextMs or 0) then return end
+    HZ._flagNextMs = now + 1000
 
-    Events.OnTick.Add(function()
-        local now = getTimestampMs()
-        if now < (HZ._flagNextMs or 0) then return end
-        HZ._flagNextMs = now + 1000
+    local v
+    for _, path in ipairs({ "Lua/HZ_reload.txt", "HZ_reload.txt" }) do
+        local ok, r = pcall(getFileReader, path, false)
+        if ok and r then
+            pcall(function() v = r:readLine() end)
+            pcall(function() r:close() end)
+            if v ~= nil then break end
+        end
+    end
+    if v == nil then return end
+    if HZ._flagLast == nil then
+        HZ._flagLast = v
+        print("[HZ] watcher ready, flag=" .. tostring(v))
+        return
+    end
+    if v ~= HZ._flagLast then
+        HZ._flagLast = v
+        print("[HZ] flag changed -> reload")
+        if HZ.reloadMod then pcall(HZ.reloadMod) end
+    end
+end)
 
-        local v
-        for _, path in ipairs({ "Lua/HZ_reload.txt", "HZ_reload.txt" }) do
-            local ok, r = pcall(getFileReader, path, false)
-            if ok and r then
-                pcall(function() v = r:readLine() end)
-                pcall(function() r:close() end)
-                if v ~= nil then break end
-            end
-        end
-        if v == nil then return end
-        if HZ._flagLast == nil then
-            HZ._flagLast = v
-            print("[HZ] watcher ready, flag=" .. tostring(v))
-            return
-        end
-        if v ~= HZ._flagLast then
-            HZ._flagLast = v
-            print("[HZ] flag changed -> reload")
-            if HZ.reloadMod then pcall(HZ.reloadMod) end
-        end
-    end)
+function HZ.onKeyPressed(key)
+    if key == Keyboard.KEY_0 then
+        HZ.reloadMod()
+    end
 end
+
+print("[HZ] hotkey installed (key0)")
