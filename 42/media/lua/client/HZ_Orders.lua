@@ -1232,16 +1232,22 @@ function HZ.tickOrder(z, ord, now)
             onTarget = (goalToBody < 1.0) or (goalToBody < selfToBody - 1.0)
         end
 
-        -- 被玩家/声音拉走：寻路目标不是尸体，而且距离还在变大。
-        -- 这种状态下怎么重下发都没用（引擎会重新追目标），订单必须放掉，
+        -- 引擎把目标设成自己脚下 = 寻路不可达（下面单独处理，不算被拉走）
+        local selfGoal = false
+        if tx and ty and x and y then
+            selfGoal = (math.abs(tx - x) < 0.75 and math.abs(ty - y) < 0.75)
+        end
+
+        -- 被玩家/声音拉走：引擎的寻路目标已经不是尸体（也不在自己脚下）。
+        -- 这时重下发导航没用 —— 引擎会继续追它自己的目标。订单必须放掉，
         -- 否则餐位被一个正在追玩家的丧尸永久占着。
         local goalIsBody = onTarget
-        if (not goalIsBody) and ord.lastD and d > ord.lastD then
+        if (not goalIsBody) and not selfGoal then
             ord.lureN = (ord.lureN or 0) + 1
         else
             ord.lureN = 0
         end
-        if (ord.lureN or 0) >= 4 then          -- 连续 4 拍（约 8 秒）都在变远
+        if (ord.lureN or 0) >= 2 then          -- 连续 2 拍（约 4 秒）都没在往尸体走
             HZ._cLured = (HZ._cLured or 0) + 1
             HZ.releaseOrder(z, ord, false)
             -- 它还在堆的半径内，不放冷却的话下一轮立刻又被派回来（追人→释放→再派），
@@ -1259,10 +1265,6 @@ function HZ.tickOrder(z, ord, now)
         ord.lastD = d
 
         -- 引擎把目标设成了自己脚下（寻路不可达时会这样）→ 记一次失败
-        local selfGoal = false
-        if tx and ty and x and y then
-            selfGoal = (math.abs(tx - x) < 0.75 and math.abs(ty - y) < 0.75)
-        end
         if selfGoal and d > WAIT_R then
             -- 注意：不要读 getPath2():size()。zombie.pathfind.Path 没有暴露给 Kahlua，
             -- 调用会抛 "attempted index: size of non-table"，debug 模式下还会弹出 Lua 调试器。
@@ -1280,12 +1282,13 @@ function HZ.tickOrder(z, ord, now)
             ord.navFail = 0
         end
 
-        -- 空转：有目标、但不是"不在赶路"就是状态停在 Idle/Default。
-        -- 这两种都要立刻重下发，否则它就那么站着（推一把才动的那种）。
+        -- 空转：引擎目标没丢，但状态停在 Idle/Default —— 自己不走了。
+        -- 这种必须立刻重下发，否则它就那么站着（就是"推一把才动"的那种）。
+        -- 被拉走（目标不是尸体）在上面已经释放，不在这里重下发。
         local idleNow = (cur ~= nil) and (IDLE_STATE[cur] == 1)
         if idleNow then HZ._cIdle = (HZ._cIdle or 0) + 1 end
 
-        if (not onTarget) or idleNow then
+        if idleNow then
             if busyState(z, cur) then return end     -- 翻窗/倒地/砸门中：不要踢状态
 
             -- 空转且已经贴到 1.2 格内：直接挂进食（引擎的 1.0 判定够不着时才需要这一下）
