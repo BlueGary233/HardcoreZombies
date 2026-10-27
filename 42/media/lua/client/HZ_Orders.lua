@@ -781,13 +781,8 @@ local function v2CellTurn(cell, now)
         local z = e.z
         if free <= 0 then break end
 
-        -- 正在翻窗/翻栅栏的先不派，免得派单时的 setDefaultState 打断它
-        local busy = busyState(z)
-        if busy then
-            -- 放回候选表末尾，下一轮再考虑
-            cand[#cand + 1] = { z = z, x = e.x, y = e.y }
-            if pile.candSet then pile.candSet[z] = true end
-        else
+        -- busy 的丧尸照样派单：busy 只表示“不去导航、不去踢它的状态机”，
+        -- 不是“不给单”。不给单 → tickOrder 不跑 → 卡住的永远没人推。
         local ord = {
             pile = pile, rec = rec, body = body, uid = rec.uid, cell = cell,
         }
@@ -800,7 +795,10 @@ local function v2CellTurn(cell, now)
 
         -- 引擎可能已经自己挂上了别的尸体（原版 AI 会自动找脚边尸体吃）。
         -- 不清掉的话，我们的订单指向 A，它却在 B 那里吃 / 往 B 走，距离越走越大。
-        if HZ.clearEat then HZ.try("v2clearEat", function() HZ.clearEat(z) end) end
+        -- clearEat 内部会 setDefaultState：翻窗/倒地中的丧尸跳过，等它动作做完再由 tickOrder 清
+        if HZ.clearEat and not busyState(z) then
+            HZ.try("v2clearEat", function() HZ.clearEat(z) end)
+        end
         ord.faceNext = true                 -- 到位后朝尸体转一次身
         -- clearEat 内部已经 setDefaultState 过一次，这里不再重复调用（每次都是 JNI）
         if HZ_clearTarget then pcall(HZ_clearTarget, z) end
@@ -808,7 +806,6 @@ local function v2CellTurn(cell, now)
 
         free = free - 1
         pile.openSeats = math.max(0, (pile.openSeats or 0) - 1)
-        end
     end
 end
 
@@ -1069,13 +1066,13 @@ function HZ.tickOrder(z, ord, now)
     ord.t = now
     if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
 
-    -- busy 状态（翻窗/倒地/起身/砸门…）连续 3 拍还在 = 卡在动作里，推一把把它带出来。
+    -- busy 状态（翻窗/倒地/起身/砸门…）连续 2 拍还在 = 卡在动作里，推一把把它带出来。
     -- busy 时下面的导航/进食全都不干预，所以这里单独观察。
     if (ord.stillMs or 0) >= 1500 then
         local busy, nudgeable = busyState(z)
         if busy then
             ord.busyN = nudgeable and ((ord.busyN or 0) + 1) or 0
-            if ord.busyN >= 3 then
+            if ord.busyN >= 2 then
                 ord.busyN = 0
                 ord.stillMs = 0
                 HZ._cBusyNudge = (HZ._cBusyNudge or 0) + 1
