@@ -568,38 +568,6 @@ function HZ.v2Cycle()
             dmin > 1e8 and -1 or dmin, dmax))
     end
 
-    -- 室内堆：按房间格拉人（墙挡气味，不能用半径，否则会把墙外的丧尸叫进来）
-    local taken = {}
-    for i = 1, #piles do
-        local pile = piles[i]
-        if pile.indoor and pile.room then
-            local list = pile.room:getSquares()
-            if list then
-                for k = 0, list:size() - 1 do
-                    local sq = list:get(k)
-                    local mos = sq and sq:getMovingObjects()
-                    if mos then
-                        for m = 0, mos:size() - 1 do
-                            local z = mos:get(m)
-                            if z and instanceof(z, "IsoZombie")
-                               and not (HZ._orders and HZ._orders[z])
-                               and not taken[z] then
-                                local dead = false
-                                HZ.try("roomDead", function() dead = z:isDead() end)
-                                if not dead then
-                                    local zx, zy = z:getX(), z:getY()
-                                    pile.cand[#pile.cand + 1] = { z = z, x = zx, y = zy }
-                                    pile.candSet[z] = true
-                                    taken[z] = true
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
     HZ._candZ, HZ._candSkipOrd, HZ._candBest = 0, 0, 0
     for i = 1, snap.n do
         local z = snap.obj[i]
@@ -610,12 +578,12 @@ function HZ.v2Cycle()
             HZ._lureUntil[z] = nil
             lureUntil = nil
         end
-        if z and not taken[z] and not lureUntil and not (HZ._orders and HZ._orders[z]) then
+        if z and not lureUntil and not (HZ._orders and HZ._orders[z]) then
             local x, y = snap.x[i], snap.y[i]
             local best, bestD = nil, nil
             for k = 1, #piles do
                 local pile = piles[k]
-                if (not pile.dead) and (not pile.indoor) and (pile.openSeats or 0) > 0 then
+                if (not pile.dead) and (pile.openSeats or 0) > 0 then
                     local mx, my = pile.sourceX or pile.x, pile.sourceY or pile.y
                     -- 还没开始腐烂的堆不发声（hasScent=false），只招身边 8 格内的丧尸
                     local R
@@ -635,7 +603,7 @@ function HZ.v2Cycle()
                 local anySeat, anyRange = false, false
                 for k = 1, #piles do
                     local pp = piles[k]
-                    if (not pp.dead) and (not pp.indoor) and (pp.openSeats or 0) > 0 then
+                    if (not pp.dead) and (pp.openSeats or 0) > 0 then
                         anySeat = true
                         local mx, my = pp.sourceX or pp.x, pp.sourceY or pp.y
                         local R = (not pp.hasScent) and 8

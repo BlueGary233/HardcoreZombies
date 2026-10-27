@@ -69,17 +69,12 @@ end
 
 -- ===================== 发声 =====================
 HZ.emitPile = function(pile, now)
-    -- 室内堆：固定小半径声源，不吃风偏（室内没有风向），派单中心 = 堆中心
+    -- 室内堆：不发声（声音会穿墙，等于把整条街的丧尸都叫来砸门），
+    -- 只保留接单半径 10 格——墙外 10 格内的丧尸会接到单，走过来撞门/翻窗（原版行为）。
     if pile.indoor then
-        local ivol = math.floor(opt("VolumeMin", 30))
-        WorldSoundManager.instance:addSound(pile.group, pile.x, pile.y, pile.z, 10, ivol, true)
         pile.sourceX, pile.sourceY = pile.x, pile.y
-        pile.lastRadius, pile.lastVolume = 10, ivol
+        pile.lastRadius, pile.lastVolume = 10, 0
         pile.lastOff = 0
-        if HZ.debugEnabled() then
-            log(string.format("emit indoor (%d,%d,%d) r=10 v=%d n=%d",
-                pile.x, pile.y, pile.z, ivol, pile.count or 0))
-        end
         return
     end
 
