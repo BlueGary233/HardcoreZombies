@@ -167,6 +167,8 @@ function HZ.releaseOrder(z, ord, requeue)
 
     if HZ._orders then HZ._orders[z] = nil end
     if ord and ord.pile and ord.pile.orders then ord.pile.orders[z] = nil end
+    -- 格子订单表也要摘：餐位 = MaxEaters - #cell.orders，不清就一直占着
+    if ord and ord.cell and ord.cell.orders then ord.cell.orders[z] = nil end
 
     -- 真正结束才出队；requeue 表示它马上回到队列，保留认领
     if not requeue then HZ.leaveQueue(z) end
@@ -414,6 +416,27 @@ local function v2BuildCells(pile)
     pile.cells = ordered
     pile.cellByKey = byKey
     pile._v2Ver = ver
+
+    -- 重建后：格子没了（最后一具尸体被吃空/移除），它上面的订单必须释放。
+    -- 否则 cellOrders[key] 变成孤儿表，订单没人维护 → 丧尸挂着单呆立，餐位也不还。
+    if pile.cellOrders then
+        for key, o in pairs(pile.cellOrders) do
+            if not byKey[key] then
+                local zs = {}
+                for z in pairs(o) do zs[#zs + 1] = z end
+                for k = 1, #zs do
+                    local z = zs[k]
+                    local ord = o[z]
+                    if ord and HZ._orders and HZ._orders[z] == ord then
+                        HZ.releaseOrder(z, ord, false)
+                    else
+                        o[z] = nil
+                    end
+                end
+                pile.cellOrders[key] = nil
+            end
+        end
+    end
 end
 
 -- 重建调度序列：所有堆的格子首尾相接 → 格子多的堆自然占更多格位（时间片加权）
