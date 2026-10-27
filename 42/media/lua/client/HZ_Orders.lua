@@ -29,17 +29,21 @@ end
 
 -- 瞬时动作状态：这些状态里踢 setDefaultState 会打断引擎动作（翻窗卡住、倒地不起、砸窗中断）。
 -- 只在“准备干预”时调用（不是每 tick），多几次跨桥可以接受。
+-- 返回两个值：busy = 不该被打断的动作；nudgeable = 卡住时“推一把”能救的那种。
+-- 砸门/攻击有自己的进度，推了反而打断，所以只 busy、不 nudgeable。
 local function busyState(z)
-    local busy = false
+    local busy, nudgeable = false, false
     HZ.try("busyChk", function()
         if z:isClimbing() or z:isFalling() or z:isKnockedDown()
-           or z:isGettingUp() or z:isStaggerBack() or z:isAttacking() then
-            busy = true
+           or z:isGettingUp() or z:isStaggerBack() then
+            busy, nudgeable = true, true
             return
         end
-        if z:getThumpTarget() ~= nil then busy = true end   -- 正在砸门/砸窗
+        if z:isAttacking() or z:getThumpTarget() ~= nil then
+            busy = true
+        end
     end)
-    return busy
+    return busy, nudgeable
 end
 
 -- ===================== buff（唯一状态，写在丧尸 modData 上） =====================
@@ -1065,6 +1069,23 @@ function HZ.tickOrder(z, ord, now)
     ord.t = now
     if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
 
+    -- busy 状态（翻窗/倒地/起身/砸门…）连续 3 拍还在 = 卡在动作里，推一把把它带出来。
+    -- busy 时下面的导航/进食全都不干预，所以这里单独观察。
+    if (ord.stillMs or 0) >= 1500 then
+        local busy, nudgeable = busyState(z)
+        if busy then
+            ord.busyN = nudgeable and ((ord.busyN or 0) + 1) or 0
+            if ord.busyN >= 3 then
+                ord.busyN = 0
+                ord.stillMs = 0
+                HZ._cBusyNudge = (HZ._cBusyNudge or 0) + 1
+                HZ.try("busyNudge", function() z:setStaggerBack(true) end)
+            end
+            return
+        end
+        ord.busyN = nil
+    end
+
     -- 站桩观测：没在吃、站着超过 5 秒的订单，10 秒打一条（含引擎进食目标）
     if HZ.debugEnabled and HZ.debugEnabled()
         and (not ord.eating) and (ord.stillMs or 0) > 5000
@@ -1209,7 +1230,7 @@ function HZ.tickOrder(z, ord, now)
             -- 先“推一把”：引擎里最接近玩家推搡、又不会把人推倒的是 setStaggerBack(true)
             -- → 进入 StaggerBackState 后退一步，状态机被强行带出卡死态，之后重新寻路。
             local nowMs = getTimestampMs()
-            if not busyState(z) and (nowMs - (ord.nudgedAt or 0)) > 5000 then
+            if (nowMs - (ord.nudgedAt or 0)) > 5000 then
                 ord.nudgedAt = nowMs
                 HZ._cNudge = (HZ._cNudge or 0) + 1
                 HZ.try("nudge", function() z:setStaggerBack(true) end)
