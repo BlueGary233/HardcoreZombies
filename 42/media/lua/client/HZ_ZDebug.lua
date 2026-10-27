@@ -81,10 +81,15 @@ local function scanAround(px, py, pz)
                             local dead = false
                             pcall(function() dead = o:isDead() end)
 
+                            -- 为什么不动？把状态机名字打出来
+                            local stName, thump = "?", false
+                            HZ.try("dbgState", function() stName = tostring(o:getCurrentStateName()) end)
+                            HZ.try("dbgThump", function() thump = (o:getThumpTarget() ~= nil) end)
+
                             zs[#zs + 1] = string.format(
-                                "Z %s pos=(%.2f,%.2f,%.2f) dead=%s tgt=%s eating=%s buffLua=%s buffJava=%s",
+                                "Z %s pos=(%.2f,%.2f,%.2f) dead=%s state=%s thump=%s tgt=%s eating=%s buffLua=%s buffJava=%s",
                                 HZ.uidOf(o), o:getX(), o:getY(), o:getZ(),
-                                bool(dead), tgt and HZ.uidOf(tgt) or "nil",
+                                bool(dead), stName, bool(thump), tgt and HZ.uidOf(tgt) or "nil",
                                 bool(eating), s(grp), s(grpJ))
                             end
                         end
@@ -157,13 +162,15 @@ local function snapshotTables(out)
             if ord.body then dist = z:DistTo(ord.body) end
             eatTgt = (z:getEatBodyTarget() ~= nil) and "T" or "F"
         end)
+        local stN = "?"
+        pcall(function() stN = tostring(z:getCurrentStateName()) end)
         out[#out + 1] = string.format(
-            "ORDER z=%s pile=(%d,%d) body=%s rec=(%d,%d) ageMs=%d d=%.2f eatTgt=%s stuckMs=%d",
+            "ORDER z=%s pile=(%d,%d) body=%s rec=(%d,%d) ageMs=%d d=%.2f state=%s eatTgt=%s stillN=%d pushN=%d",
             HZ.uidOf(z), ord.pile and ord.pile.x or -1, ord.pile and ord.pile.y or -1,
             HZ.uidOf(ord.body),
             ord.rec and ord.rec.x or -1, ord.rec and ord.rec.y or -1,
-            getTimestampMs() - (ord.t or 0), dist, eatTgt,
-            ord.stuckAt and (getTimestampMs() - ord.stuckAt) or -1)
+            getTimestampMs() - (ord.t or 0), dist, stN, eatTgt,
+            ord.stillN or 0, ord.nudgeN or 0)
     end
     out[#out + 1] = "orders total=" .. n
 

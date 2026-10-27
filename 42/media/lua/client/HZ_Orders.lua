@@ -1101,6 +1101,25 @@ function HZ.tickOrder(z, ord, now)
         ord.stillN, ord.nudgeN = 0, 0
     end
     if (ord.stillN or 0) >= 3 and d > EAT_R and not ord.eating then
+        -- 卡住现场取证：状态名 + 引擎目标 + 进食目标 + 坐标
+        if HZ.debugEnabled and HZ.debugEnabled() then
+            local st, gx, gy, gnone, et = "?", -1, -1, "?", "nil"
+            local bx0, by0 = -1, -1
+            HZ.try("nudgeDiag", function()
+                st = tostring(z:getCurrentStateName())
+                local pf = z:getPathFindBehavior2()
+                if pf then
+                    gnone = tostring(pf:isGoalNone())
+                    gx, gy = pf:getTargetX(), pf:getTargetY()
+                end
+                local t = z:getEatBodyTarget()
+                if t then et = tostring(t) end
+                bx0, by0 = ord.body:getX(), ord.body:getY()
+            end)
+            HZ.log(string.format("NUDGE uid=%s state=%s d=%.2f stillN=%d pos=(%.2f,%.2f) body=(%.2f,%.2f) goal=(%.1f,%.1f) none=%s eat=%s",
+                tostring(ord.uid), st, d, (ord.stillN or 0) + 3,
+                x or -1, y or -1, bx0, by0, gx, gy, gnone, et))
+        end
         ord.stillN = 0
         ord.nudgeN = (ord.nudgeN or 0) + 1
         HZ._cNudge = (HZ._cNudge or 0) + 1
