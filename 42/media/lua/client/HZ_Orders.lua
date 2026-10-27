@@ -617,7 +617,13 @@ function HZ.v2Cycle()
                 local pile = piles[k]
                 if (not pile.dead) and (not pile.indoor) and (pile.openSeats or 0) > 0 then
                     local mx, my = pile.sourceX or pile.x, pile.sourceY or pile.y
-                    local R = tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
+                    -- 还没开始腐烂的堆不发声（hasScent=false），只招身边 8 格内的丧尸
+                    local R
+                    if not pile.hasScent then      -- 还没开始腐烂（字段为 nil/false）
+                        R = 8
+                    else
+                        R = tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
+                    end
                     local dx, dy = x - mx, y - my
                     local d = dx * dx + dy * dy
                     if d <= R * R and (not bestD or d < bestD) then best, bestD = pile, d end
@@ -632,7 +638,8 @@ function HZ.v2Cycle()
                     if (not pp.dead) and (not pp.indoor) and (pp.openSeats or 0) > 0 then
                         anySeat = true
                         local mx, my = pp.sourceX or pp.x, pp.sourceY or pp.y
-                        local R = tonumber(pp.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
+                        local R = (not pp.hasScent) and 8
+                            or (tonumber(pp.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60)
                         local dx, dy = x - mx, y - my
                         if dx * dx + dy * dy <= R * R then anyRange = true break end
                     end
