@@ -895,7 +895,6 @@ local EAT_R      = 1.0     -- 到位
 local WAIT_R     = 2.7     -- 等位区
 local MOVE_EPS   = 0.3     -- 位移小于它 = 没动
 local NAV_RETRY  = 2000    -- 没动 2s → 重下导航
-local GIVEUP_MS  = 4000    -- 没动 4s → 换目标 / 释放
 
 -- 到位：确认 → 重发 → 置位
 local function eatTick(z, ord, now)
@@ -1094,21 +1093,23 @@ function HZ.tickOrder(z, ord, now)
     ord.t = now
     if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
 
-    -- busy 状态（翻窗/倒地/起身/砸门…）连续 2 拍还在 = 卡在动作里，推一把把它带出来。
-    -- busy 时下面的导航/进食全都不干预，所以这里单独观察。
-    if (ord.stillMs or 0) >= 1500 then
-        local busy, nudgeable = busyState(z)
-        if busy then
-            ord.busyN = nudgeable and ((ord.busyN or 0) + 1) or 0
-            if ord.busyN >= 2 then
-                ord.busyN = 0
-                ord.stillMs = 0
-                HZ._cBusyNudge = (HZ._cBusyNudge or 0) + 1
-                HZ.try("busyNudge", function() z:setStaggerBack(true) end)
-            end
-            return
+    -- 卡住判定：连续 3 拍位置没变 → 无条件推一把（正在吃饭的除外，吃饭在上面就 return 了）。
+    -- 不看状态机：翻窗/砸门/倒地都可能卡；状态名只用来决定“别乱踢它的状态”。
+    if not moved then
+        ord.stillN = (ord.stillN or 0) + 1
+    else
+        ord.stillN, ord.nudgeN = 0, 0
+    end
+    if (ord.stillN or 0) >= 3 and d > EAT_R and not ord.eating then
+        ord.stillN = 0
+        ord.nudgeN = (ord.nudgeN or 0) + 1
+        HZ._cNudge = (HZ._cNudge or 0) + 1
+        HZ.try("nudge", function() z:setStaggerBack(true) end)
+        if ord.nudgeN >= 2 then
+            ord.nudgeN = 0
+            retargetOrRelease(z, ord, now)    -- 推两次还不动 → 换尸体/换格/释放
         end
-        ord.busyN = nil
+        return
     end
 
     -- 站桩观测：没在吃、站着超过 5 秒的订单，10 秒打一条（含引擎进食目标）
@@ -1245,22 +1246,6 @@ function HZ.tickOrder(z, ord, now)
             if accepted then HZ._navOk = (HZ._navOk or 0) + 1 end
         end
 
-        -- 统一 4 秒：v2 里餐位是派单时预定的，有订单就一定有座位，
-        -- 不存在“在桌边等位”这回事（那是我从 0.3.0 抄过来的旧概念）。
-        -- 之前桌边给 12 秒，等于让站在尸体旁不动的丧尸干等 12 秒才推/换。
-        if (ord.stillMs or 0) >= GIVEUP_MS then
-            -- 先“推一把”：引擎里最接近玩家推搡、又不会把人推倒的是 setStaggerBack(true)
-            -- → 进入 StaggerBackState 后退一步，状态机被强行带出卡死态，之后重新寻路。
-            local nowMs = getTimestampMs()
-            if (nowMs - (ord.nudgedAt or 0)) > 5000 then
-                ord.nudgedAt = nowMs
-                HZ._cNudge = (HZ._cNudge or 0) + 1
-                HZ.try("nudge", function() z:setStaggerBack(true) end)
-                ord.stillMs = 0
-                return
-            end
-            retargetOrRelease(z, ord, now)
-        end
         return
     end
 
