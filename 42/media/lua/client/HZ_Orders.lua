@@ -1178,14 +1178,10 @@ function HZ.tickOrder(z, ord, now)
             selfGoal = (math.abs(tx - x) < 0.75 and math.abs(ty - y) < 0.75)
         end
         if selfGoal and d > WAIT_R then
-            local psz = -1
-            HZ.try("pathSize", function()
-                local pth = z:getPath2()
-                if pth then psz = pth:size() end
-            end)
+            -- 注意：不要读 getPath2():size()。zombie.pathfind.Path 没有暴露给 Kahlua，
+            -- 调用会抛 "attempted index: size of non-table"，debug 模式下还会弹出 Lua 调试器。
             if (ord.navFail or 0) == 0 and HZ.debugEnabled and HZ.debugEnabled() then
-                HZ.log(string.format("selfGoal uid=%s d=%.1f pathSize=%d",
-                    tostring(ord.uid), d, psz))
+                HZ.log(string.format("selfGoal uid=%s d=%.1f", tostring(ord.uid), d))
             end
             ord.navFail = (ord.navFail or 0) + 1
             if ord.navFail >= 3 then
