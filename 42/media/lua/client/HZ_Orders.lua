@@ -958,6 +958,14 @@ local function v2CellTurn(cell, now)
         if HZ_clearTarget then pcall(HZ_clearTarget, z) end
         HZ.refreshBuffs(z)
 
+        -- 派单即下发：先设 idle（清掉引擎内部可能的 repath 冷却），再导航到尸体。
+        -- 不做这一步的话，要等下一拍 tickOrder 才会动，中间会白站最多一个格子周期。
+        HZ._cDispNav = (HZ._cDispNav or 0) + 1
+        HZ.try("dispNav", function()
+            z:setDefaultState()
+            z:pathToLocationF(cx, cy)
+        end)
+
         free = free - 1
         pile.openSeats = math.max(0, (pile.openSeats or 0) - 1)
     end
