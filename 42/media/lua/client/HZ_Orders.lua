@@ -1115,7 +1115,7 @@ function HZ.tickOrder(z, ord, now)
         if HZ.debugEnabled and HZ.debugEnabled() then
             local st, gx, gy, gnone, et, px, py = probeZ(z)
             HZ.log(string.format("NUDGE-AFTER  uid=%s moved=%s dt=%dms d=%.2f state=%s pos=(%.2f,%.2f) goal=(%.1f,%.1f) none=%s eat=%s  (before state=%s d=%.2f)",
-                tostring(ord.uid), moved and "Y" or "N", dt, d or -1, st, px, py, gx, gy, gnone, et,
+                tostring(HZ.uidOf and HZ.uidOf(z) or z), moved and "Y" or "N", dt, d or -1, st, px, py, gx, gy, gnone, et,
                 tostring(ord.dbgPush.state), ord.dbgPush.d or -1))
         end
         ord.dbgPush = nil
@@ -1133,16 +1133,35 @@ function HZ.tickOrder(z, ord, now)
         if HZ.debugEnabled and HZ.debugEnabled() then
             local st, gx, gy, gnone, et, px, py = probeZ(z)
             HZ.log(string.format("NUDGE-BEFORE uid=%s state=%s d=%.2f stillN=%d pos=(%.2f,%.2f) goal=(%.1f,%.1f) none=%s eat=%s",
-                tostring(ord.uid), st, d, (ord.stillN or 0) + 3, px, py, gx, gy, gnone, et))
+                tostring(HZ.uidOf and HZ.uidOf(z) or z), st, d, (ord.stillN or 0) + 3, px, py, gx, gy, gnone, et))
             ord.dbgPush = { at = now, d = d, state = st }
         end
         ord.stillN = 0
         ord.nudgeN = (ord.nudgeN or 0) + 1
-        HZ._cNudge = (HZ._cNudge or 0) + 1
-        HZ.try("nudge", function() z:setStaggerBack(true) end)
-        if ord.nudgeN >= 2 then
+        local n = ord.nudgeN
+        -- 证据（控制台 NUDGE-BEFORE/AFTER）：卡住的多数是 ZombieIdleState，
+        -- 目标就是尸体、路径也是通的，只是状态机停在 Idle 不走。
+        -- 这时先重新下发寻路把它踢出 Idle；推（staggerBack）会把它往后顶，
+        -- 有栅栏时会把它顶到栅栏另一边，反而来回跳。所以分三级：
+        if n == 1 then
+            if d <= EAT_R + 0.8 and not busyState(z) then
+                -- 就在尸体旁边（1.0~1.8 格）却站着：直接挂进食目标让引擎接管，
+                -- 别把它推开（推一下反而后退，有栅栏时会被顶到另一边来回跳）。
+                HZ._cNearEat = (HZ._cNearEat or 0) + 1
+                eatTick(z, ord, now)
+            else
+                HZ._cRepath = (HZ._cRepath or 0) + 1
+                HZ.try("stuckRepath", function()
+                    z:setDefaultState()
+                    z:pathToLocationF(ord.body:getX(), ord.body:getY())
+                end)
+            end
+        elseif n == 2 then
+            HZ._cNudge = (HZ._cNudge or 0) + 1
+            HZ.try("nudge", function() z:setStaggerBack(true) end)
+        else
             ord.nudgeN = 0
-            retargetOrRelease(z, ord, now)    -- 推两次还不动 → 换尸体/换格/释放
+            retargetOrRelease(z, ord, now)    -- 重发 + 推都不动 → 换尸体/换格/释放
         end
         return
     end
