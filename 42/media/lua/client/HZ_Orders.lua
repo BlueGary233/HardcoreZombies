@@ -718,7 +718,9 @@ end
 --   ③ 目标不是玩家；导航点不在玩家 3×3
 --   谁先扫到谁拿走（不做配额，目的是让一个堆尽快吃空）
 -- ============================================================================
-local IDLE_OK = { ZombieIdleState = 1, PathFindState = 1, WalkTowardState = 1 }
+-- ZombieTurnAlerted：听到动静转个身，exit 只是 pathToSound，没有未完成事务，可以安全接管
+local IDLE_OK = { ZombieIdleState = 1, PathFindState = 1, WalkTowardState = 1,
+                  ZombieTurnAlerted = 1 }
 
 function HZ.v2PickForCell(pile, cell, need)
     local snap = HZ._snap
