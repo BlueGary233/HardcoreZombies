@@ -1099,7 +1099,7 @@ function HZ.tickOrder(z, ord, now)
         else
             ord.lureN = 0
         end
-        if (ord.lureN or 0) >= 6 then          -- 连续 6 拍（约 12 秒）都在变远
+        if (ord.lureN or 0) >= 4 then          -- 连续 4 拍（约 8 秒）都在变远
             HZ._cLured = (HZ._cLured or 0) + 1
             HZ.releaseOrder(z, ord, false)
             -- 它还在堆的半径内，不放冷却的话下一轮立刻又被派回来（追人→释放→再派），
