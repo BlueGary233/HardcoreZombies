@@ -762,6 +762,14 @@ local function v2CellTurn(cell, now)
         local z = e.z
         if free <= 0 then break end
 
+        -- 正在翻窗/翻栅栏的先不派，免得派单时的 setDefaultState 打断它
+        local busy = false
+        HZ.try("dispClimb", function() busy = (z:isClimbing() == true) end)
+        if busy then
+            -- 放回候选表末尾，下一轮再考虑
+            cand[#cand + 1] = { z = z, x = e.x, y = e.y }
+            if pile.candSet then pile.candSet[z] = true end
+        else
         local ord = {
             pile = pile, rec = rec, body = body, uid = rec.uid, cell = cell,
         }
@@ -782,6 +790,7 @@ local function v2CellTurn(cell, now)
 
         free = free - 1
         pile.openSeats = math.max(0, (pile.openSeats or 0) - 1)
+        end
     end
 end
 
@@ -997,6 +1006,22 @@ function HZ.tickOrder(z, ord, now)
         retargetOrRelease(z, ord, now)      -- 目标没了
         return
     end
+
+    -- 翻窗/翻栅栏过程中一个字都别碰：setDefaultState 会打断 Climb 状态，
+    -- 有概率把丧尸卡在窗上（引擎的 climbing 标记没复位）。
+    local climbing = false
+    HZ.try("isClimbing", function() climbing = (z:isClimbing() == true) end)
+    if climbing then
+        -- 正常翻越 1~2 拍就结束；连续 3 拍还在翻 = 卡住了（引擎的 climbing 标记没复位）
+        ord.climbMs = (ord.climbMs or 0) + 1
+        if ord.climbMs >= 3 then
+            ord.climbMs = 0
+            HZ._cClimbStuck = (HZ._cClimbStuck or 0) + 1
+            HZ.try("climbReset", function() z:setDefaultState() end)
+        end
+        return
+    end
+    ord.climbMs = nil
 
     -- 转向：0.3.0 在这里消费（只要有目标就转一次），不是等到开吃
     if ord.faceNext then
