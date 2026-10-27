@@ -95,6 +95,21 @@ If you run into performance problems, make sure the mod's debug mode is off, as 
 
 [h2]Changelog[/h2]
 
+[b]0.4.1[/b]
+[list]
+[*][b]Stuck[/b]: a zombie that hasn't moved for 3 ticks gets shoved once; if two shoves don't help it switches to another corpse. Zombies that used to idle beside a body now get moving.
+[*][b]Continuation[/b]: an idle state now triggers an immediate re-path instead of waiting; within 3 tiles the zombie enters "eat mode" and the engine walks it in and starts the meal on arrival.
+[*][b]Lured[/b]: zombies distracted by a player or noise release their order within 4 seconds, so seats are no longer held by zombies that are chasing someone.
+[*][b]Unreachable[/b]: a blocked path now switches corpse in 4 seconds (was 6).
+[*][b]Fixed[/b]: zombies climbing through windows, knocked down or thumping are no longer interrupted by the mod (they could get stuck on the window).
+[*][b]Fixed[/b]: harmless pathSize error spam with debug mode off.
+[/list]
+[b]0.4.0[/b]
+[list]
+[*]Dispatch reversed: the corpse (cell) now picks the zombie. Seats are reserved per cell, so zombies no longer fight over the same spot.
+[*]Three-layer queues (corpse 4s / cell 2s / pile 2s) keep performance steady with hundreds of corpses.
+[*]Indoor piles: silent, only affect zombies inside the room.
+[/list]
 [b]0.3.0[/b]
 [list]
 [*]Initial release. Why 0.3.0? Because I rewrote it twice... and found that the Java bridge is a huge performance win.
