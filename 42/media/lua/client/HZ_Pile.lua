@@ -705,7 +705,14 @@ function HZ.tickPiles()
     end
 
     -- ② 订单兜底：丧尸死了 / 目标尸体没了
-    if HZ.ordersSweepPile then HZ.ordersSweepPile(p) end
+    -- 每个订单在 v2Tick → tickOrder 里已经每 2 秒校验过一次（HZ_orderState +
+    -- orderFlags + recByUid），这里只是"格子不在调度里"时的安全网。
+    -- 所以按 8 秒扫一次堆就够，省掉重复的跨桥调用。
+    local sweepNow = getTimestampMs()
+    if HZ.ordersSweepPile and (sweepNow - (p._sweptAt or 0)) > 8000 then
+        p._sweptAt = sweepNow
+        HZ.ordersSweepPile(p)
+    end
 
     -- ③ 容量（按格算）
     local maxEaters  = HZ.opt.MaxEaters
