@@ -908,7 +908,8 @@ end
 -- 续单：单一状态机（替代 navOne 的 17 条路径）
 --   行军 / 等位 / 到位 三段；一个 stillMs 计时器替代 osc / stuckNow / targetMiss / waitAt
 -- ============================================================================
-local EAT_R      = 1.0     -- 到位
+local EAT_R      = 1.0     -- 挂进食目标（引擎 updateEatBodyTarget 也是 1.0 格内）
+local EAT_MODE_R = 3.0     -- 3 格内：吃饭模式（登记 bodyToEat + 寻路）；3 格外只导航
 local WAIT_R     = 2.7     -- 等位区
 local MOVE_EPS   = 0.3     -- 位移小于它 = 没动
 local NAV_RETRY  = 2000    -- 没动 2s → 重下导航
@@ -1138,30 +1139,11 @@ function HZ.tickOrder(z, ord, now)
         end
         ord.stillN = 0
         ord.nudgeN = (ord.nudgeN or 0) + 1
-        local n = ord.nudgeN
-        -- 证据（控制台 NUDGE-BEFORE/AFTER）：卡住的多数是 ZombieIdleState，
-        -- 目标就是尸体、路径也是通的，只是状态机停在 Idle 不走。
-        -- 这时先重新下发寻路把它踢出 Idle；推（staggerBack）会把它往后顶，
-        -- 有栅栏时会把它顶到栅栏另一边，反而来回跳。所以分三级：
-        if n == 1 then
-            if d <= EAT_R + 0.8 and not busyState(z) then
-                -- 就在尸体旁边（1.0~1.8 格）却站着：直接挂进食目标让引擎接管，
-                -- 别把它推开（推一下反而后退，有栅栏时会被顶到另一边来回跳）。
-                HZ._cNearEat = (HZ._cNearEat or 0) + 1
-                eatTick(z, ord, now)
-            else
-                HZ._cRepath = (HZ._cRepath or 0) + 1
-                HZ.try("stuckRepath", function()
-                    z:setDefaultState()
-                    z:pathToLocationF(ord.body:getX(), ord.body:getY())
-                end)
-            end
-        elseif n == 2 then
-            HZ._cNudge = (HZ._cNudge or 0) + 1
-            HZ.try("nudge", function() z:setStaggerBack(true) end)
-        else
+        HZ._cNudge = (HZ._cNudge or 0) + 1
+        HZ.try("nudge", function() z:setStaggerBack(true) end)
+        if ord.nudgeN >= 2 then
             ord.nudgeN = 0
-            retargetOrRelease(z, ord, now)    -- 重发 + 推都不动 → 换尸体/换格/释放
+            retargetOrRelease(z, ord, now)    -- 推两次还不动 → 换尸体/换格/释放
         end
         return
     end
@@ -1188,6 +1170,15 @@ function HZ.tickOrder(z, ord, now)
     -- ④ 距离 > 1.0：要么在赶路，要么在桌边等位 —— 两种情况都要保证导航活着。
     -- 旧代码就是这么做的（near 为假就走导航分支），我之前把 1.0~2.7 单独劈成
     -- “等位区”且不发导航，结果丧尸卡在 1.5~2.2 格原地不动。
+    -- 3 格内：登记"要吃这具尸体"——引擎在 Idle 且 ≤1.0 格时会自动挂进食目标
+    --（IsoZombie.updateEatBodyTarget: bodyToEat != null && isCurrentState(Idle)
+    --  && DistToSquared(bodyToEat) <= 1.0 → setEatBodyTarget）。
+    -- 配合寻路，就是引擎自己的"寻路 + 吃饭"。3 格外只导航，不碰进食。
+    if d <= EAT_MODE_R and d > EAT_R and not ord.bodyToEatSet then
+        ord.bodyToEatSet = true
+        HZ.try("setBodyToEat", function() z:setBodyToEat(ord.body) end)
+    end
+
     if d > EAT_R then
         if ord.eating then
             if d <= EAT_R + 0.2 then
