@@ -483,6 +483,32 @@ function HZ.v2Cycle()
             seats = seats + math.max(0, v2MaxEaters() - n)
         end
         pile.openSeats = seats
+
+        -- rec.orders 改成「格子订单表的投影」：每轮重算，不再靠增减维护。
+        -- 之前 rec 与 cell 各记一份账，任何一条路径漏改一边就会漂（曾出现一格 5 单）。
+        for k = 1, #cells do
+            local recs = cells[k].recs
+            for i = 1, #recs do recs[i].orders = 0 end
+        end
+        for k = 1, #cells do
+            for _, o in pairs(cells[k].orders) do
+                local r = o and o.rec
+                if r then r.orders = (r.orders or 0) + 1 end
+            end
+        end
+
+        -- Debug：对账 rec.orders 与格子订单表。两者必须相等，
+        -- 不等说明某次派出/释放只更新了一边（名额会漂）。
+        if HZ.debugEnabled and HZ.debugEnabled() and HZ.due("seatChk" .. tostring(pile.pid), 10000) then
+            local recSum = 0
+            for k = 1, #(pile.foods or {}) do recSum = recSum + (pile.foods[k].orders or 0) end
+            local cellSum = 0
+            for k = 1, #cells do for _ in pairs(cells[k].orders) do cellSum = cellSum + 1 end end
+            if recSum ~= cellSum then
+                HZ.log(string.format("seat drift pile=(%d,%d) rec=%d cell=%d orders=%d seats=%d",
+                    math.floor(pile.x or 0), math.floor(pile.y or 0), recSum, cellSum, #(pile.foods or {}), seats))
+            end
+        end
     end
 
     if not snap then return end
