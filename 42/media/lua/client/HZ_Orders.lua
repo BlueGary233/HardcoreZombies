@@ -29,6 +29,23 @@ end
 
 -- 瞬时动作状态：这些状态里踢 setDefaultState 会打断引擎动作（翻窗卡住、倒地不起、砸窗中断）。
 -- 只在“准备干预”时调用（不是每 tick），多几次跨桥可以接受。
+-- 调试探针：一次拿到 状态机 / 寻路目标 / 进食目标 / 坐标（只在 debug 下调用）
+local function probeZ(z)
+    local st, gx, gy, gnone, et, px, py = "?", -1, -1, "?", "nil", -1, -1
+    HZ.try("probe", function()
+        st = tostring(z:getCurrentStateName())
+        px, py = z:getX(), z:getY()
+        local pf = z:getPathFindBehavior2()
+        if pf then
+            gnone = tostring(pf:isGoalNone())
+            gx, gy = pf:getTargetX(), pf:getTargetY()
+        end
+        local t = z:getEatBodyTarget()
+        if t then et = tostring(t) end
+    end)
+    return st, gx, gy, gnone, et, px, py
+end
+
 -- 用状态机名字判断瞬时动作（一个字符串 JNI，比连查 6 个标志位便宜，也更准）。
 -- 关键证据：ClimbThroughWindowState / ClimbOverFence / ClimbOverWall 只写
 -- NetworkZombieAI.isClimbing，IsoGameCharacter.climbing 只有绳索类状态写，
@@ -1093,6 +1110,17 @@ function HZ.tickOrder(z, ord, now)
     ord.t = now
     if moved then ord.stillMs = 0 else ord.stillMs = (ord.stillMs or 0) + dt end
 
+    -- 推完的对比：下一拍打一行 AFTER，看状态/目标变了没
+    if ord.dbgPush then
+        if HZ.debugEnabled and HZ.debugEnabled() then
+            local st, gx, gy, gnone, et, px, py = probeZ(z)
+            HZ.log(string.format("NUDGE-AFTER  uid=%s moved=%s dt=%dms d=%.2f state=%s pos=(%.2f,%.2f) goal=(%.1f,%.1f) none=%s eat=%s  (before state=%s d=%.2f)",
+                tostring(ord.uid), moved and "Y" or "N", dt, d or -1, st, px, py, gx, gy, gnone, et,
+                tostring(ord.dbgPush.state), ord.dbgPush.d or -1))
+        end
+        ord.dbgPush = nil
+    end
+
     -- 卡住判定：连续 3 拍位置没变 → 无条件推一把（正在吃饭的除外，吃饭在上面就 return 了）。
     -- 不看状态机：翻窗/砸门/倒地都可能卡；状态名只用来决定“别乱踢它的状态”。
     if not moved then
@@ -1101,24 +1129,12 @@ function HZ.tickOrder(z, ord, now)
         ord.stillN, ord.nudgeN = 0, 0
     end
     if (ord.stillN or 0) >= 3 and d > EAT_R and not ord.eating then
-        -- 卡住现场取证：状态名 + 引擎目标 + 进食目标 + 坐标
+        -- 推之前打一行（状态 / 目标 / 坐标），推完下一拍打 AFTER，直接对比
         if HZ.debugEnabled and HZ.debugEnabled() then
-            local st, gx, gy, gnone, et = "?", -1, -1, "?", "nil"
-            local bx0, by0 = -1, -1
-            HZ.try("nudgeDiag", function()
-                st = tostring(z:getCurrentStateName())
-                local pf = z:getPathFindBehavior2()
-                if pf then
-                    gnone = tostring(pf:isGoalNone())
-                    gx, gy = pf:getTargetX(), pf:getTargetY()
-                end
-                local t = z:getEatBodyTarget()
-                if t then et = tostring(t) end
-                bx0, by0 = ord.body:getX(), ord.body:getY()
-            end)
-            HZ.log(string.format("NUDGE uid=%s state=%s d=%.2f stillN=%d pos=(%.2f,%.2f) body=(%.2f,%.2f) goal=(%.1f,%.1f) none=%s eat=%s",
-                tostring(ord.uid), st, d, (ord.stillN or 0) + 3,
-                x or -1, y or -1, bx0, by0, gx, gy, gnone, et))
+            local st, gx, gy, gnone, et, px, py = probeZ(z)
+            HZ.log(string.format("NUDGE-BEFORE uid=%s state=%s d=%.2f stillN=%d pos=(%.2f,%.2f) goal=(%.1f,%.1f) none=%s eat=%s",
+                tostring(ord.uid), st, d, (ord.stillN or 0) + 3, px, py, gx, gy, gnone, et))
+            ord.dbgPush = { at = now, d = d, state = st }
         end
         ord.stillN = 0
         ord.nudgeN = (ord.nudgeN or 0) + 1
