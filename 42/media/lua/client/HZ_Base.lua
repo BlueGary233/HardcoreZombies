@@ -90,6 +90,14 @@ HZ._throttle = {}
 
 -- 频率常量（毫秒）：优先用每分钟刷新的缓存，避免每帧查 ModOptions
 -- 统一清理"吃"状态（三连调用收口）
+-- 只清进食目标/动画，不动状态机（出队时用：setDefaultState 会打断动作）
+function HZ.clearEatTarget(z)
+    if not z then return end
+    pcall(function() z:setEatBodyTarget(nil, true) end)
+    pcall(function() z:setBodyToEat(nil) end)
+    pcall(function() z:setForceEatingAnimation(false) end)
+end
+
 function HZ.clearEat(z)
     if not z then return end
     pcall(function() z:setEatBodyTarget(nil, true) end)

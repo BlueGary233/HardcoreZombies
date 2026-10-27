@@ -227,8 +227,9 @@ function HZ.releaseOrder(z, ord, requeue)
     if not z then return end
     navBump("rel")
 
+    -- 出队只清"吃谁"，不碰状态机：clearEat 末尾的 setDefaultState 会把动作打断
     HZ.try("releaseClearTarget", function()
-        HZ.clearEat(z)
+        if HZ.clearEatTarget then HZ.clearEatTarget(z) else HZ.clearEat(z) end
     end)
 
     -- 退出吃饭：按时长结算饱食度
@@ -705,6 +706,82 @@ function HZ.v2Cycle()
     end
 end
 
+-- ============================================================================
+-- 派单：格子发单时现场挑人（不再依赖入队队列）
+--   ① 快照坐标做半径剔除（无 JNI、无余量）
+--   ② 存在性 + 状态 ∈ {Idle, PathFind, WalkToward} + 无订单 + 无冷却
+--   ③ 目标不是玩家；导航点不在玩家 3×3
+--   谁先扫到谁拿走（不做配额，目的是让一个堆尽快吃空）
+-- ============================================================================
+local IDLE_OK = { ZombieIdleState = 1, PathFindState = 1, WalkTowardState = 1 }
+
+function HZ.v2PickForCell(pile, cell, need)
+    local snap = HZ._snap
+    if not snap or (snap.n or 0) == 0 or not need or need <= 0 then return nil end
+
+    local mx, my = pile.sourceX or pile.x, pile.sourceY or pile.y
+    local R = (not pile.hasScent) and 8
+        or (tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60)
+    local R2 = R * R
+
+    local pl = (getSpecificPlayer and getSpecificPlayer(0)) or nil   -- 单人游戏，唯一玩家
+    local px = pl and pl:getX() or nil
+    local py = pl and pl:getY() or nil
+
+    local now = getTimestampMs()
+    local out = {}
+
+    for i = 1, snap.n do
+        local z = snap.obj[i]
+        local x, y = snap.x[i], snap.y[i]
+        if z and x then
+            local dx, dy = x - mx, y - my
+            if dx * dx + dy * dy <= R2 then
+                local ok = true
+
+                -- 已有订单
+                if HZ._orders and HZ._orders[z] then ok = false end
+
+                -- 冷却（被拉走/出队后的冷却表）
+                if ok and HZ._lureUntil then
+                    local cd = HZ._lureUntil[z]
+                    if cd then
+                        if cd < now then HZ._lureUntil[z] = nil else ok = false end
+                    end
+                end
+
+                -- 状态 + 存在性 + 目标（异常一律视为不合格：fail-closed）
+                if ok then
+                    local pass = false
+                    HZ.try("pickChk", function()
+                        if not z:getSquare() then return end
+                        local st = z:getCurrentStateName()
+                        if not st or not IDLE_OK[st] then return end
+                        local t = z:getTarget()
+                        if t and instanceof(t, "IsoPlayer") then return end
+                        if px then
+                            local pf = z:getPathFindBehavior2()
+                            if pf and not pf:isGoalNone() then
+                                local gx, gy = pf:getTargetX(), pf:getTargetY()
+                                if math.abs(gx - px) <= 1 and math.abs(gy - py) <= 1 then return end
+                            end
+                        end
+                        pass = true
+                    end)
+                    ok = pass
+                end
+
+                if ok then
+                    out[#out + 1] = { e = { z = z, x = x, y = y }, d = dx * dx + dy * dy }
+                    if #out >= need then break end
+                end
+            end
+        end
+    end
+    if #out == 0 then return nil end
+    return out
+end
+
 -- 一格的行动：先维护订单，再派单（第一具尸体独享全部餐位）
 local function v2CellTurn(cell, now)
     local pile = cell.pile
@@ -754,6 +831,8 @@ local function v2CellTurn(cell, now)
     for _ in pairs(cell.orders) do free = free - 1 end
     if free <= 0 then return end
 
+    local USE_QUOTA = false      -- 新规则：不做配额，让一个堆尽快吃空
+    if USE_QUOTA then
     -- 配额：本堆还有几个格子没坐满、还有几个没单的丧尸。
     -- 不配额的话，环序靠前的格子会把附近丧尸一次抢光，后面的格子一具都分不到。
     local pending, freeZ = 0, 0
@@ -776,6 +855,7 @@ local function v2CellTurn(cell, now)
             if free > quota then free = quota end
         end
     end
+    end
 
     -- 自然顺序：第一具吃完/骨化才轮到下一具；未加载的跳过本轮
     local rec, body
@@ -788,18 +868,23 @@ local function v2CellTurn(cell, now)
         return
     end
 
+    local cx, cy = body:getX(), body:getY()
+
+    -- 新骨架：格子发单时现场挑人；旧候选表（pile.cand）逻辑保留但不再执行
+    local USE_LEGACY_PICK = false
+    local picks, pickN = nil, 0
+
+    if USE_LEGACY_PICK then
     local cand = pile.cand
     if not cand or #cand == 0 then
         HZ._cNoCand = (HZ._cNoCand or 0) + 1    -- 有餐位、有尸体，但本堆没有可接单丧尸
         return
     end
 
-    local cx, cy = body:getX(), body:getY()
-
     -- 一次扫描挑出最近的 free 只（free 最多 MaxEaters，通常 4）。
     -- 旧写法是「每挑一只 → 全表扫一遍 → table.remove 移位」，候选表几百只时
     -- 等于 4×N 次比较 + 4 次 O(N) 移位，这就是接单时那点可感知的 CPU。
-    local picks, pickN = {}, 0
+    picks, pickN = {}, 0
     for i = 1, #cand do
         local e = cand[i]
         if e and e.z and not (HZ._orders and HZ._orders[e.z]) then
@@ -816,8 +901,6 @@ local function v2CellTurn(cell, now)
             end
         end
     end
-    if pickN == 0 then return end
-
     -- 挑中的从候选表里摘掉：一次压缩，不再逐只 table.remove
     local used = {}
     for k = 1, pickN do used[picks[k].e] = true end
@@ -831,6 +914,15 @@ local function v2CellTurn(cell, now)
     for k = 1, pickN do
         local e = picks[k].e
         if pile.candSet then pile.candSet[e.z] = nil end
+    end
+    else
+        picks = HZ.v2PickForCell(pile, cell, free)
+        pickN = picks and #picks or 0
+    end
+
+    if pickN == 0 then
+        HZ._cNoCand = (HZ._cNoCand or 0) + 1
+        return
     end
 
     for k = 1, pickN do
@@ -1238,16 +1330,20 @@ function HZ.tickOrder(z, ord, now)
             selfGoal = (math.abs(tx - x) < 0.75 and math.abs(ty - y) < 0.75)
         end
 
-        -- 被玩家/声音拉走：引擎的寻路目标已经不是尸体（也不在自己脚下）。
-        -- 这时重下发导航没用 —— 引擎会继续追它自己的目标。订单必须放掉，
-        -- 否则餐位被一个正在追玩家的丧尸永久占着。
-        local goalIsBody = onTarget
-        if (not goalIsBody) and not selfGoal then
+        -- 被拉走 = 引擎的"追踪目标"变成了玩家。
+        -- 不再用"寻路目标坐标 vs 尸体坐标"这种间接判据：绕栅栏时路径末节点在栅栏边，
+        -- 会被误判成"目标不对"，从而错误地放掉订单。
+        local chasing = false
+        HZ.try("lureTgt", function()
+            local t = z:getTarget()
+            if t and instanceof(t, "IsoPlayer") then chasing = true end
+        end)
+        if chasing then
             ord.lureN = (ord.lureN or 0) + 1
         else
             ord.lureN = 0
         end
-        if (ord.lureN or 0) >= 2 then          -- 连续 2 拍（约 4 秒）都没在往尸体走
+        if (ord.lureN or 0) >= 2 then          -- 连续 2 拍（约 4 秒）确认在追人
             HZ._cLured = (HZ._cLured or 0) + 1
             HZ.releaseOrder(z, ord, false)
             -- 它还在堆的半径内，不放冷却的话下一轮立刻又被派回来（追人→释放→再派），
