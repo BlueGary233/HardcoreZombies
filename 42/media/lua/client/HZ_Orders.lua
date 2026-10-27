@@ -27,6 +27,21 @@ local function orderFlags(z, body)
     return dead, hasTgt, bodyAlive
 end
 
+-- 瞬时动作状态：这些状态里踢 setDefaultState 会打断引擎动作（翻窗卡住、倒地不起、砸窗中断）。
+-- 只在“准备干预”时调用（不是每 tick），多几次跨桥可以接受。
+local function busyState(z)
+    local busy = false
+    HZ.try("busyChk", function()
+        if z:isClimbing() or z:isFalling() or z:isKnockedDown()
+           or z:isGettingUp() or z:isStaggerBack() or z:isAttacking() then
+            busy = true
+            return
+        end
+        if z:getThumpTarget() ~= nil then busy = true end   -- 正在砸门/砸窗
+    end)
+    return busy
+end
+
 -- ===================== buff（唯一状态，写在丧尸 modData 上） =====================
 -- 只有两个字段，Lua 侧不存任何副本：
 --   hz_pile  认领它的堆 pid（0 = 不在任何队列）
@@ -763,8 +778,7 @@ local function v2CellTurn(cell, now)
         if free <= 0 then break end
 
         -- 正在翻窗/翻栅栏的先不派，免得派单时的 setDefaultState 打断它
-        local busy = false
-        HZ.try("dispClimb", function() busy = (z:isClimbing() == true) end)
+        local busy = busyState(z)
         if busy then
             -- 放回候选表末尾，下一轮再考虑
             cand[#cand + 1] = { z = z, x = e.x, y = e.y }
@@ -868,6 +882,7 @@ local function eatTick(z, ord, now)
 
     if not onTarget then
         -- 没挂上/挂到别的尸体：每秒重发一次，直到引擎接受。
+        if busyState(z) then return end        -- 翻窗/倒地时不发进食指令
         if (now - (ord.lastEatCmd or 0)) > 1000 then
             HZ.try("tickEat", function()
                 z:setDefaultState()
@@ -1096,7 +1111,9 @@ function HZ.tickOrder(z, ord, now)
             -- 真的离桌：结算 + 清进食状态
             ord.eating = false
             if HZ.statsEatStop then HZ.statsEatStop(z) end
-            HZ.try("leaveFar", function() HZ.clearEat(z) end)
+            if not busyState(z) then
+                HZ.try("leaveFar", function() HZ.clearEat(z) end)
+            end
         end
 
         -- 引擎当前目标是不是我们给的那具尸体
@@ -1176,6 +1193,7 @@ function HZ.tickOrder(z, ord, now)
         end
 
         if not onTarget then
+            if busyState(z) then return end     -- 翻窗/倒地/砸门中：不要踢状态
             -- 频率天然就是 2 秒一次（每个格子每圈轮到一次，订单跟着格子走），
             -- 不需要再叠一层节流。
             -- IsoZombie.pathToLocationF 的字节码：
