@@ -29,19 +29,47 @@ end
 
 -- 瞬时动作状态：这些状态里踢 setDefaultState 会打断引擎动作（翻窗卡住、倒地不起、砸窗中断）。
 -- 只在“准备干预”时调用（不是每 tick），多几次跨桥可以接受。
--- 返回两个值：busy = 不该被打断的动作；nudgeable = 卡住时“推一把”能救的那种。
--- 砸门/攻击有自己的进度，推了反而打断，所以只 busy、不 nudgeable。
+-- 用状态机名字判断瞬时动作（一个字符串 JNI，比连查 6 个标志位便宜，也更准）。
+-- 关键证据：ClimbThroughWindowState / ClimbOverFence / ClimbOverWall 只写
+-- NetworkZombieAI.isClimbing，IsoGameCharacter.climbing 只有绳索类状态写，
+-- 所以 z:isClimbing() 在翻窗时是 false —— 之前据此判断，等于完全瞎了。
+-- State.getName() = 类的 simpleName（javap 已确认）。
+local BUSY_STATE = {
+    ClimbThroughWindowState = 1, ClimbOverFenceState = 1, ClimbOverWallState = 1,
+    ClimbSheetRopeState = 1, ClimbDownSheetRopeState = 1,
+    ZombieOnGroundState = 1, ZombieGetUpState = 1, ZombieGetUpFromCrawlState = 1,
+    ZombieFallDownState = 1, ZombieFallingState = 1, ZombieRagdollOnGroundState = 1,
+    StaggerBackState = 1, ZombieHitReactionState = 1, BumpedState = 1,
+    CollideWithWallState = 1, LungeState = 1,
+    -- 2 = 只 busy、不推：砸门/攻击有自己的进度，推了等于打断
+    ThumpState = 2, AttackState = 2, SmashWindowState = 2,
+}
+
+-- 返回：busy = 不该被打断；nudgeable = 卡住时“推一把”能救的那种
 local function busyState(z)
     local busy, nudgeable = false, false
+    if HZ._stateNameOk ~= false then
+        local ok, st = pcall(function() return z:getCurrentStateName() end)
+        if not ok then
+            HZ._stateNameOk = false          -- 引擎没暴露：退回老标志位
+        else
+            local k = st and BUSY_STATE[st]
+            if k then
+                busy = true
+                nudgeable = (k == 1)
+                HZ._busyHit = HZ._busyHit or {}
+                HZ._busyHit[st] = (HZ._busyHit[st] or 0) + 1     -- 诊断：哪些状态在挡路
+            end
+            return busy, nudgeable
+        end
+    end
     HZ.try("busyChk", function()
         if z:isClimbing() or z:isFalling() or z:isKnockedDown()
            or z:isGettingUp() or z:isStaggerBack() then
             busy, nudgeable = true, true
             return
         end
-        if z:isAttacking() or z:getThumpTarget() ~= nil then
-            busy = true
-        end
+        if z:isAttacking() or z:getThumpTarget() ~= nil then busy = true end
     end)
     return busy, nudgeable
 end
