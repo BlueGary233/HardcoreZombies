@@ -62,15 +62,27 @@ local BUSY_STATE = {
     ThumpState = 2, AttackState = 2, SmashWindowState = 2,
 }
 
+-- 空转状态：路径走完、状态机停在原地没往下走（推一把就能救的就是这些）
+local IDLE_STATE = { ZombieIdleState = 1, IdleState = 1, GenericDefaultState = 1 }
+
+-- 取状态机名字（一次 JNI）；引擎没暴露时返回 nil 并永久关闭这条路
+local function stateName(z)
+    if HZ._stateNameOk == false then return nil end
+    local ok, st = pcall(function() return z:getCurrentStateName() end)
+    if not ok then
+        HZ._stateNameOk = false
+        return nil
+    end
+    return st
+end
+
 -- 返回：busy = 不该被打断；nudgeable = 卡住时“推一把”能救的那种
-local function busyState(z)
+local function busyState(z, st)
     local busy, nudgeable = false, false
     if HZ._stateNameOk ~= false then
-        local ok, st = pcall(function() return z:getCurrentStateName() end)
-        if not ok then
-            HZ._stateNameOk = false          -- 引擎没暴露：退回老标志位
-        else
-            local k = st and BUSY_STATE[st]
+        st = st or stateName(z)
+        if st ~= nil then
+            local k = BUSY_STATE[st]
             if k then
                 busy = true
                 nudgeable = (k == 1)
@@ -1148,6 +1160,9 @@ function HZ.tickOrder(z, ord, now)
         return
     end
 
+    -- 本拍状态机名字（一次 JNI）：既用来判 busy，也用来判“空转”
+    local cur = stateName(z)
+
     -- 站桩观测：没在吃、站着超过 5 秒的订单，10 秒打一条（含引擎进食目标）
     if HZ.debugEnabled and HZ.debugEnabled()
         and (not ord.eating) and (ord.stillMs or 0) > 5000
@@ -1265,8 +1280,20 @@ function HZ.tickOrder(z, ord, now)
             ord.navFail = 0
         end
 
-        if not onTarget then
-            if busyState(z) then return end     -- 翻窗/倒地/砸门中：不要踢状态
+        -- 空转：有目标、但不是"不在赶路"就是状态停在 Idle/Default。
+        -- 这两种都要立刻重下发，否则它就那么站着（推一把才动的那种）。
+        local idleNow = (cur ~= nil) and (IDLE_STATE[cur] == 1)
+        if idleNow then HZ._cIdle = (HZ._cIdle or 0) + 1 end
+
+        if (not onTarget) or idleNow then
+            if busyState(z, cur) then return end     -- 翻窗/倒地/砸门中：不要踢状态
+
+            -- 空转且已经贴到 1.2 格内：直接挂进食（引擎的 1.0 判定够不着时才需要这一下）
+            if idleNow and d <= EAT_R + 0.2 then
+                HZ._cIdleEat = (HZ._cIdleEat or 0) + 1
+                eatTick(z, ord, now)
+                return
+            end
             -- 频率天然就是 2 秒一次（每个格子每圈轮到一次，订单跟着格子走），
             -- 不需要再叠一层节流。
             -- IsoZombie.pathToLocationF 的字节码：
