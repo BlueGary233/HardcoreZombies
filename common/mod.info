@@ -1,7 +1,7 @@
 name=硬核丧尸
 id=HardcoreZombies
 author=BlueGary233
-description=尸体会散发气味，循味而来的丧尸按餐位排队进食；吃饱后营养值上升，营养满的丧尸会开始奔跑。含尸堆风偏、室内尸堆、尸体骨化与静音认领机制。必须搭配 ZombieBuddy 使用。
+description=丧尸会吃尸体，吃饱会变跑尸，饿了会变弱。
 versionMin=42.0.0
 modversion=0.4.1
 poster=poster.png
