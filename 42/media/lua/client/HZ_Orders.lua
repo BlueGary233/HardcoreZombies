@@ -1112,8 +1112,15 @@ function HZ.tickOrder(z, ord, now)
                 tx, ty = pf:getTargetX(), pf:getTargetY()
             end
         end)
+        -- 判"目标有没有用"，而不是"目标是不是正好等于尸体坐标"。
+        -- 引擎会把 target 改写成路径最后一个节点（绕路/部分路径时并不在尸体上），
+        -- 用严格相等会导致每 2 秒判一次"目标不对"→ 踢状态 → 肉眼看到每 4 秒卡一下。
+        -- 只要目标比它现在离尸体更近，就认为它在正常赶路，别碰它。
         if tx and ty then
-            onTarget = (math.abs(tx - bx) < 0.75 and math.abs(ty - by) < 0.75)
+            local gdx, gdy = tx - bx, ty - by
+            local goalToBody = math.sqrt(gdx * gdx + gdy * gdy)
+            local selfToBody = d or 1e9
+            onTarget = (goalToBody < 1.0) or (goalToBody < selfToBody - 1.0)
         end
 
         -- 被玩家/声音拉走：寻路目标不是尸体，而且距离还在变大。
