@@ -646,69 +646,6 @@ function HZ.v2Cycle()
     end
 
     HZ._candZ, HZ._candSkipOrd, HZ._candBest = 0, 0, 0
-    -- 候选表构建：新骨架不再用它选人（改为格子发单时现场挑），
-    -- 代码保留，开关关掉，避免每 2 秒白扫一遍全快照。
-    local USE_CAND_BUILD = false
-    if USE_CAND_BUILD then
-    for i = 1, snap.n do
-        local z = snap.obj[i]
-        if z then HZ._candZ = HZ._candZ + 1 end
-        if z and (HZ._orders and HZ._orders[z]) then HZ._candSkipOrd = HZ._candSkipOrd + 1 end
-        local lureUntil = HZ._lureUntil and HZ._lureUntil[z]
-        if lureUntil and lureUntil < getTimestampMs() then
-            HZ._lureUntil[z] = nil
-            lureUntil = nil
-        end
-        if z and not lureUntil and not (HZ._orders and HZ._orders[z]) then
-            local x, y = snap.x[i], snap.y[i]
-            local best, bestD = nil, nil
-            for k = 1, #piles do
-                local pile = piles[k]
-                if (not pile.dead) and (pile.openSeats or 0) > 0 then
-                    local mx, my = pile.sourceX or pile.x, pile.sourceY or pile.y
-                    -- 还没开始腐烂的堆不发声（hasScent=false），只招身边 8 格内的丧尸
-                    local R
-                    if not pile.hasScent then      -- 还没开始腐烂（字段为 nil/false）
-                        R = 8
-                    else
-                        R = tonumber(pile.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60
-                    end
-                    local dx, dy = x - mx, y - my
-                    local d = dx * dx + dy * dy
-                    if d <= R * R and (not bestD or d < bestD) then best, bestD = pile, d end
-                end
-            end
-            if not best and HZ.debugEnabled and HZ.debugEnabled() then
-                -- 诊断分支：会再扫一遍所有堆，只在 DebugMode 下跑
-                -- （之前没加门，等于每个没找到堆的丧尸都要多扫一遍，白烧 CPU）
-                local anySeat, anyRange = false, false
-                for k = 1, #piles do
-                    local pp = piles[k]
-                    if (not pp.dead) and (pp.openSeats or 0) > 0 then
-                        anySeat = true
-                        local mx, my = pp.sourceX or pp.x, pp.sourceY or pp.y
-                        local R = (not pp.hasScent) and 8
-                            or (tonumber(pp.lastRadius) or tonumber(HZ.opt.RadiusMin) or 60)
-                        local dx, dy = x - mx, y - my
-                        if dx * dx + dy * dy <= R * R then anyRange = true break end
-                    end
-                end
-                if not anySeat then
-                    HZ._cNoPile = (HZ._cNoPile or 0) + 1
-                elseif not anyRange then
-                    HZ._cOutR = (HZ._cOutR or 0) + 1
-                else
-                    HZ._cOdd = (HZ._cOdd or 0) + 1     -- 有座位也在半径内却没进候选
-                end
-            end
-            if best then
-                HZ._candBest = (HZ._candBest or 0) + 1
-                best.cand[#best.cand + 1] = { z = z, x = x, y = y }
-                best.candSet[z] = true
-            end
-        end
-    end
-    end
 end
 
 -- ============================================================================
@@ -838,31 +775,6 @@ local function v2CellTurn(cell, now)
     for _ in pairs(cell.orders) do free = free - 1 end
     if free <= 0 then return end
 
-    local USE_QUOTA = false      -- 新规则：不做配额，让一个堆尽快吃空
-    if USE_QUOTA then
-    -- 配额：本堆还有几个格子没坐满、还有几个没单的丧尸。
-    -- 不配额的话，环序靠前的格子会把附近丧尸一次抢光，后面的格子一具都分不到。
-    local pending, freeZ = 0, 0
-    do
-        local cs = pile.cells or {}
-        for i = 1, #cs do
-            local c = cs[i]
-            local n = 0
-            for _ in pairs(c.orders) do n = n + 1 end
-            if #c.recs > 0 and n < v2MaxEaters() then pending = pending + 1 end
-        end
-        local cd = pile.cand or {}
-        for i = 1, #cd do
-            local e = cd[i]
-            if e and e.z and not (HZ._orders and HZ._orders[e.z]) then freeZ = freeZ + 1 end
-        end
-        if pending > 1 and freeZ > 0 then
-            local quota = math.ceil(freeZ / pending)
-            if quota < 1 then quota = 1 end
-            if free > quota then free = quota end
-        end
-    end
-    end
 
     -- 自然顺序：第一具吃完/骨化才轮到下一具；未加载的跳过本轮
     local rec, body
@@ -877,55 +789,9 @@ local function v2CellTurn(cell, now)
 
     local cx, cy, cz = body:getX(), body:getY(), body:getZ()
 
-    -- 新骨架：格子发单时现场挑人；旧候选表（pile.cand）逻辑保留但不再执行
-    local USE_LEGACY_PICK = false
-    local picks, pickN = nil, 0
-
-    if USE_LEGACY_PICK then
-    local cand = pile.cand
-    if not cand or #cand == 0 then
-        HZ._cNoCand = (HZ._cNoCand or 0) + 1    -- 有餐位、有尸体，但本堆没有可接单丧尸
-        return
-    end
-
-    -- 一次扫描挑出最近的 free 只（free 最多 MaxEaters，通常 4）。
-    -- 旧写法是「每挑一只 → 全表扫一遍 → table.remove 移位」，候选表几百只时
-    -- 等于 4×N 次比较 + 4 次 O(N) 移位，这就是接单时那点可感知的 CPU。
-    picks, pickN = {}, 0
-    for i = 1, #cand do
-        local e = cand[i]
-        if e and e.z and not (HZ._orders and HZ._orders[e.z]) then
-            local dx, dy = e.x - cx, e.y - cy
-            local d = dx * dx + dy * dy
-            local pos = pickN + 1
-            for k = 1, pickN do
-                if d < picks[k].d then pos = k break end
-            end
-            if pos <= free then
-                table.insert(picks, pos, { e = e, d = d })
-                if #picks > free then table.remove(picks) end
-                pickN = #picks
-            end
-        end
-    end
-    -- 挑中的从候选表里摘掉：一次压缩，不再逐只 table.remove
-    local used = {}
-    for k = 1, pickN do used[picks[k].e] = true end
-    local kept = {}
-    for i = 1, #cand do
-        local e = cand[i]
-        if e and not used[e] then kept[#kept + 1] = e end
-    end
-    cand = kept
-    pile.cand = kept
-    for k = 1, pickN do
-        local e = picks[k].e
-        if pile.candSet then pile.candSet[e.z] = nil end
-    end
-    else
-        picks = HZ.v2PickForCell(pile, cell, free)
-        pickN = picks and #picks or 0
-    end
+    -- 新骨架：格子发单时现场挑人（旧候选表 pile.cand 的代码已移除）
+    local picks = HZ.v2PickForCell(pile, cell, free)
+    local pickN = picks and #picks or 0
 
     if pickN == 0 then
         HZ._cNoCand = (HZ._cNoCand or 0) + 1
@@ -1031,7 +897,6 @@ local EAT_R      = 1.0     -- 挂进食目标（引擎 updateEatBodyTarget 也�
 local EAT_MODE_R = 3.0     -- 3 格内：吃饭模式（登记 bodyToEat + 寻路）；3 格外只导航
 local WAIT_R     = 2.7     -- 等位区
 local MOVE_EPS   = 0.3     -- 位移小于它 = 没动
-local NAV_RETRY  = 2000    -- 没动 2s → 重下导航
 
 -- 到位：确认 → 重发 → 置位
 local function eatTick(z, ord, now)

@@ -150,9 +150,6 @@ local function getSpeed(z)
     end
     return S_MAX
 end
--- 写速度等级
-local function setSpeed(z, v) if HZ_setSpeedType then pcall(HZ_setSpeedType, z, clampv(v, S_MIN, S_MAX, S_MAX)) end end
-
 -- 读力量：5 最强，1 最弱
 local function getStrength(z)
     if HZ_getStrength then
@@ -161,9 +158,6 @@ local function getStrength(z)
     end
     return T_MAX
 end
--- 写力量
-local function setStrength(z, v) if HZ_setStrength then pcall(HZ_setStrength, z, clampv(v, T_MIN, T_MAX, T_MAX)) end end
-
 -- 读视力：1 最好，3 最差
 local function getSight(z)
     if HZ_getSight then
@@ -172,9 +166,6 @@ local function getSight(z)
     end
     return V_MAX
 end
--- 写视力
-local function setSight(z, v) if HZ_setSight then pcall(HZ_setSight, z, clampv(v, V_MIN, V_MAX, V_MAX)) end end
-
 -- 读听力：1 最好，3 最差
 local function getHearing(z)
     if HZ_getHearing then
@@ -183,9 +174,6 @@ local function getHearing(z)
     end
     return E_MAX
 end
--- 写听力
-local function setHearing(z, v) if HZ_setHearing then pcall(HZ_setHearing, z, clampv(v, E_MIN, E_MAX, E_MAX)) end end
-
 -- ===================== 营养 <-> 五维 =====================
 -- 五维一共 17 档：health 7 / speed 2 / strength 4 / sight 2 / hearing 2
 -- 每档 = 0.25 营养，所以 f(五维) = 0.5 + 0.25 × 已完成的档数（0.5 ~ 4.75）
@@ -387,7 +375,7 @@ local function getEntry(z)
     HZ._byUid[uid] = s
     HZ._statDirty = true
 
-    -- 听力状态由 HZ.refreshBuffs 统一维护（这里不写，避免 statsFull 递归）
+    -- 听力状态由 HZ.refreshBuffs 统一维护（这里不写，避免递归）
     return s
 end-- 公开入口：把僵尸写进总表（初始化 nutrition = f(五维) 现算 + 对齐）
 -- 给一只丧尸建营养条目：从桥上读五维作为基准
@@ -446,11 +434,6 @@ end
 
 -- 吃饱 = 饱食满（5）。没满就继续接单、继续吃。
 -- 用 statsCurrentSat 而不是 s.satiety：正在吃的进度要算进去，否则会晚一拍。
-function HZ.statsFull(z)
-    if not z then return false end
-    return HZ.statsCurrentSat(z) >= MAX_SAT
-end
-
 -- ===================== 营养维护（每个快照周期把 N 只各过一遍，单只约 4 秒一次） =====================
 -- 处理单只：消化 / 饿 / 校准 / 静音 / 跨阈值
 local function processEntry(z, s, nowH, dh)
