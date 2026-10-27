@@ -1,5 +1,35 @@
 # 更新日志
 
+## 0.4.1（行为修正：卡住 / 续单 / 拉走）
+
+**目标只有一个：没有丧尸再"站在尸体旁边发呆"。**
+
+### 卡住 = 只看有没有动
+
+- 连续 **3 拍位置没变**就 `setStaggerBack(true)` 推一把，推两次还不动才换目标。
+- 不再按状态机分级判断"该不该推"：翻窗、倒地、砸门都会卡，状态名只用来决定"别乱踢它的状态"。
+- 新增诊断日志 `NUDGE-BEFORE` / `NUDGE-AFTER`（状态 / 寻路目标 / 进食目标 / 坐标 / 是否移动），一次推送两行对比。
+- 计数器：`HZ._cNudge`、`HZ._cIdle`、`HZ._cIdleEat`、`HZ._cLured`、`HZ._cNoPath`。
+
+### 续单
+
+- **空转（`ZombieIdleState` / `IdleState` / `GenericDefaultState`）立即重下发导航**，不再等卡住超时。原因是引擎把路径走完后就停在 Idle，`setDefaultState + pathToLocationF` 是唯一能把它推回 `PathFind` 的手段。
+- 空转且已在 **1.2 格**内 → 直接 `eatTick` 挂进食目标。
+- **3 格内 = 吃饭模式**：`setBodyToEat(body)` 登记目标。引擎 `updateEatBodyTarget()` 在 `IdleState && DistToSquared <= 1.0` 时自动挂 `setEatBodyTarget`，到位即开吃；3 格外只导航，不碰进食。
+
+### 被拉走 / 不可达
+
+- **被拉走**（引擎寻路目标不是我们的尸体，也不在它自己脚下）= 在追玩家或声音：**连续 2 拍（约 4 秒）就出队释放餐位**，30 秒内不再派回。原来要 4 拍，且会先徒劳地重下发导航，和引擎抢目标。
+- **不可达**（引擎目标 = 自己脚下）：`navFail` 连续 2 拍（约 4 秒）就换尸体/换格/释放，原来 3 拍。
+
+### 修掉的坑
+
+- `isClimbing()` 只反映绳索类状态：翻窗 / 翻栅栏 / 翻墙写的是 `NetworkZombieAI.isClimbing`。据此判断翻窗永远是 false，导致翻窗中的丧尸被我们 `setDefaultState` 打断、卡在窗上。改用 `getCurrentStateName()`（= 状态类的 simpleName）。
+- 派单不再跳过 busy 丧尸：busy 只是"不导航、不踢状态"，不是"不给单"——不给单它们就永远不进维护流程。
+- `getPath2():size()` 会抛 `attempted index: size of non-table`（`zombie.pathfind.Path` 未暴露给 Kahlua），调试模式还会连带弹出 Lua 调试器 UI，已删除。
+- 去掉 `GIVEUP_MS` / 桌边 12 秒 / busy 计数等中间层，卡住处理只剩"3 拍不动 → 推"。
+
+
 ## 0.4.0（架构重构，已完成）
 
 **派单方向反转：从「丧尸找尸体」改成「尸体（格子）挑丧尸」。三层队列。**
