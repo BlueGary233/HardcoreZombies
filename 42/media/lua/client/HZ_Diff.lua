@@ -20,6 +20,40 @@ local function emptySnap()
     return { obj = {}, x = {}, y = {}, stats = {}, n = 0 }
 end
 
+-- 翻越看门狗：每拍快照跑一次，专管“没有订单”的丧尸。
+-- 为什么需要它：派单会跳过 busy 状态的丧尸，所以卡在窗上的丧尸拿不到订单，
+-- tickOrder 根本不会执行 → 那边的 3 拍推一把永远轮不到它。
+-- 做法：连续两拍（约 8 秒）位置没变，才跨桥问一次 isClimbing，命中就推。
+function HZ.climbWatchdog()
+    local s = HZ._snap
+    if not s or (s.n or 0) == 0 then HZ._still = {}; return end
+    local prev = HZ._still or {}
+    local cur = {}
+    for i = 1, s.n do
+        local z = s.obj[i]
+        local x, y = s.x[i], s.y[i]
+        if z and x then
+            local p = prev[z]
+            if p and math.abs(p[1] - x) < 0.25 and math.abs(p[2] - y) < 0.25 then
+                local n = (p[3] or 0) + 1
+                if n >= 2 then
+                    local climbing = false
+                    HZ.try("climbWatch", function() climbing = (z:isClimbing() == true) end)
+                    if climbing then
+                        HZ._cClimbNudge = (HZ._cClimbNudge or 0) + 1
+                        HZ.try("climbNudge", function() z:setStaggerBack(true) end)
+                        n = 0
+                    end
+                end
+                cur[z] = { x, y, n }
+            else
+                cur[z] = { x, y, 0 }
+            end
+        end
+    end
+    HZ._still = cur
+end
+
 HZ._snap    = HZ._snap or emptySnap()
 HZ._snapGen = HZ._snapGen or 0
 
@@ -103,6 +137,9 @@ function HZ.pullSnapshot()
             tostring(srcX ~= nil and srcX[1] ~= nil)))
     end
 
+    -- 没有订单的卡住丧尸也要被推（派单会跳过 busy，这类拿不到订单）
+    HZ.climbWatchdog()
+
     if HZ.debugEnabled() then
         HZ.log(string.format("snapshot: n=%d removed=%d gen=%d", n, dropped, HZ._snapGen))
     end
@@ -125,6 +162,7 @@ function HZ.resetDiff()
     HZ._snap       = emptySnap()
     HZ._snapGen    = (HZ._snapGen or 0) + 1
     HZ._snapProbed = nil
+    HZ._still      = {}
     HZ._throttle["snap"] = nil
     if HZ_resetDiff then pcall(HZ_resetDiff) end
 end
