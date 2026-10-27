@@ -83,6 +83,10 @@ function HZ.refreshBuffs(z, pid)
 
     if s and s.hurt then bits = bits + B.HURT end
 
+    -- 位没变就不写：setBuff 是 JNI 调用，还有 transmit 成本；派单/维护每 2 秒都会走到这里
+    HZ._buffCache = HZ._buffCache or setmetatable({}, { __mode = "k" })
+    if HZ._buffCache[z] == bits then return end
+    HZ._buffCache[z] = bits
     if HZ_setBuff then pcall(HZ_setBuff, z, bits) end
 end
 
@@ -414,7 +418,11 @@ end
 
 -- 重建调度序列：所有堆的格子首尾相接 → 格子多的堆自然占更多格位（时间片加权）
 function HZ.v2Cycle()
-    if not HZ.due("v2cycle", 2000) then return end
+    -- 尸体增减是事件驱动的（OnDeadBodySpawn / 骨化 / 移除），格子表本身又按
+    -- _foodsVer 缓存，所以这层不需要 2 秒轮询：跟快照同频（4 秒）就够。
+    -- 真正要求 2 秒的是：tickPiles（发声/维护）和 v2Tick（派单/导航/进食）。
+    local cycleMs = (HZ.snapIntervalMs and HZ.snapIntervalMs()) or 4000
+    if not HZ.due("v2cycle", cycleMs) then return end
 
     local sched = {}
     local piles = HZ.piles or {}
@@ -432,7 +440,8 @@ function HZ.v2Cycle()
     V2.pos = 0
     V2.slot = 0
 
-    -- 可接单队列：纯数据，每 2s 重建一次
+    -- 可接单队列：输入只有「快照位置 + 堆的餐位」，快照 4 秒才换一次，
+    -- 所以没必要时隔 2 秒重建两遍 —— 跟快照同频，省一半扫描。
     local snap = HZ._snap
     for i = 1, #piles do
         local pile = piles[i]
@@ -560,8 +569,9 @@ function HZ.v2Cycle()
                     if d <= R * R and (not bestD or d < bestD) then best, bestD = pile, d end
                 end
             end
-            if not best then
-                -- 没进任何候选表：区分「所有堆都满座」和「都超半径」
+            if not best and HZ.debugEnabled and HZ.debugEnabled() then
+                -- 诊断分支：会再扫一遍所有堆，只在 DebugMode 下跑
+                -- （之前没加门，等于每个没找到堆的丧尸都要多扫一遍，白烧 CPU）
                 local anySeat, anyRange = false, false
                 for k = 1, #piles do
                     local pp = piles[k]
@@ -680,20 +690,48 @@ local function v2CellTurn(cell, now)
     end
 
     local cx, cy = body:getX(), body:getY()
-    while free > 0 and #cand > 0 do
-        local bi, bd
-        for i = 1, #cand do
-            local e = cand[i]
-            if e and e.z and not (HZ._orders and HZ._orders[e.z]) then
-                local dx, dy = e.x - cx, e.y - cy
-                local d = dx * dx + dy * dy
-                if (not bd) or d < bd then bi, bd = i, d end
+
+    -- 一次扫描挑出最近的 free 只（free 最多 MaxEaters，通常 4）。
+    -- 旧写法是「每挑一只 → 全表扫一遍 → table.remove 移位」，候选表几百只时
+    -- 等于 4×N 次比较 + 4 次 O(N) 移位，这就是接单时那点可感知的 CPU。
+    local picks, pickN = {}, 0
+    for i = 1, #cand do
+        local e = cand[i]
+        if e and e.z and not (HZ._orders and HZ._orders[e.z]) then
+            local dx, dy = e.x - cx, e.y - cy
+            local d = dx * dx + dy * dy
+            local pos = pickN + 1
+            for k = 1, pickN do
+                if d < picks[k].d then pos = k break end
+            end
+            if pos <= free then
+                table.insert(picks, pos, { e = e, d = d })
+                if #picks > free then table.remove(picks) end
+                pickN = #picks
             end
         end
-        if not bi then break end
+    end
+    if pickN == 0 then return end
 
-        local e = table.remove(cand, bi)
+    -- 挑中的从候选表里摘掉：一次压缩，不再逐只 table.remove
+    local used = {}
+    for k = 1, pickN do used[picks[k].e] = true end
+    local kept = {}
+    for i = 1, #cand do
+        local e = cand[i]
+        if e and not used[e] then kept[#kept + 1] = e end
+    end
+    cand = kept
+    pile.cand = kept
+    for k = 1, pickN do
+        local e = picks[k].e
+        if pile.candSet then pile.candSet[e.z] = nil end
+    end
+
+    for k = 1, pickN do
+        local e = picks[k].e
         local z = e.z
+        if free <= 0 then break end
 
         local ord = {
             pile = pile, rec = rec, body = body, uid = rec.uid, cell = cell,
@@ -709,7 +747,7 @@ local function v2CellTurn(cell, now)
         -- 不清掉的话，我们的订单指向 A，它却在 B 那里吃 / 往 B 走，距离越走越大。
         if HZ.clearEat then HZ.try("v2clearEat", function() HZ.clearEat(z) end) end
         ord.faceNext = true                 -- 到位后朝尸体转一次身
-        HZ.try("v2forceIdle", function() z:setDefaultState() end)
+        -- clearEat 内部已经 setDefaultState 过一次，这里不再重复调用（每次都是 JNI）
         if HZ_clearTarget then pcall(HZ_clearTarget, z) end
         HZ.refreshBuffs(z)
 
