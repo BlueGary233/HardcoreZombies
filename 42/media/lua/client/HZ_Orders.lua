@@ -873,7 +873,7 @@ local function v2CellTurn(cell, now)
         return
     end
 
-    local cx, cy = body:getX(), body:getY()
+    local cx, cy, cz = body:getX(), body:getY(), body:getZ()
 
     -- 新骨架：格子发单时现场挑人；旧候选表（pile.cand）逻辑保留但不再执行
     local USE_LEGACY_PICK = false
@@ -963,7 +963,7 @@ local function v2CellTurn(cell, now)
         HZ._cDispNav = (HZ._cDispNav or 0) + 1
         HZ.try("dispNav", function()
             z:setDefaultState()
-            z:pathToLocationF(cx, cy)
+            z:pathToLocationF(cx, cy, cz)      -- IsoZombie.pathToLocationF 需要 3 个参数
         end)
 
         free = free - 1
