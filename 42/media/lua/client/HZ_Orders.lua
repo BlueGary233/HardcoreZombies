@@ -1206,6 +1206,16 @@ function HZ.tickOrder(z, ord, now)
         -- 放弃换目标：桌边等位给足 12 秒（挤不进去才换），路程上 4 秒不动就换
         local limit = (d <= WAIT_R) and 12000 or GIVEUP_MS
         if (ord.stillMs or 0) >= limit then
+            -- 先“推一把”：引擎里最接近玩家推搡、又不会把人推倒的是 setStaggerBack(true)
+            -- → 进入 StaggerBackState 后退一步，状态机被强行带出卡死态，之后重新寻路。
+            local nowMs = getTimestampMs()
+            if not busyState(z) and (nowMs - (ord.nudgedAt or 0)) > 5000 then
+                ord.nudgedAt = nowMs
+                HZ._cNudge = (HZ._cNudge or 0) + 1
+                HZ.try("nudge", function() z:setStaggerBack(true) end)
+                ord.stillMs = 0
+                return
+            end
             retargetOrRelease(z, ord, now)
         end
         return
