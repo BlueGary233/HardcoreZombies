@@ -1224,9 +1224,10 @@ function HZ.tickOrder(z, ord, now)
             if accepted then HZ._navOk = (HZ._navOk or 0) + 1 end
         end
 
-        -- 放弃换目标：桌边等位给足 12 秒（挤不进去才换），路程上 4 秒不动就换
-        local limit = (d <= WAIT_R) and 12000 or GIVEUP_MS
-        if (ord.stillMs or 0) >= limit then
+        -- 统一 4 秒：v2 里餐位是派单时预定的，有订单就一定有座位，
+        -- 不存在“在桌边等位”这回事（那是我从 0.3.0 抄过来的旧概念）。
+        -- 之前桌边给 12 秒，等于让站在尸体旁不动的丧尸干等 12 秒才推/换。
+        if (ord.stillMs or 0) >= GIVEUP_MS then
             -- 先“推一把”：引擎里最接近玩家推搡、又不会把人推倒的是 setStaggerBack(true)
             -- → 进入 StaggerBackState 后退一步，状态机被强行带出卡死态，之后重新寻路。
             local nowMs = getTimestampMs()
