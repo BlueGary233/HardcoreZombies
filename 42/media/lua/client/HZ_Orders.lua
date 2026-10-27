@@ -1272,10 +1272,10 @@ function HZ.tickOrder(z, ord, now)
                 HZ.log(string.format("selfGoal uid=%s d=%.1f", tostring(ord.uid), d))
             end
             ord.navFail = (ord.navFail or 0) + 1
-            if ord.navFail >= 3 then
+            if ord.navFail >= 2 then
                 ord.navFail = 0
                 HZ._cNoPath = (HZ._cNoPath or 0) + 1
-                retargetOrRelease(z, ord, now)     -- 这条路走不通，换尸体
+                retargetOrRelease(z, ord, now)     -- 两拍都不可达就走不通，换尸体
                 return
             end
         else
