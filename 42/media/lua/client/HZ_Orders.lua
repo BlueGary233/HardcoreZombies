@@ -1022,21 +1022,6 @@ function HZ.tickOrder(z, ord, now)
         return
     end
 
-    -- 翻窗/翻栅栏过程中一个字都别碰：setDefaultState 会打断 Climb 状态，
-    -- 有概率把丧尸卡在窗上（引擎的 climbing 标记没复位）。
-    local climbing = false
-    HZ.try("isClimbing", function() climbing = (z:isClimbing() == true) end)
-    if climbing then
-        -- 正常翻越 1~2 拍就结束；连续 3 拍还在翻 = 卡住了（引擎的 climbing 标记没复位）
-        ord.climbMs = (ord.climbMs or 0) + 1
-        if ord.climbMs >= 3 then
-            ord.climbMs = 0
-            HZ._cClimbStuck = (HZ._cClimbStuck or 0) + 1
-            HZ.try("climbReset", function() z:setDefaultState() end)
-        end
-        return
-    end
-    ord.climbMs = nil
 
     -- 转向：0.3.0 在这里消费（只要有目标就转一次），不是等到开吃
     if ord.faceNext then
