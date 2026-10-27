@@ -646,6 +646,10 @@ function HZ.v2Cycle()
     end
 
     HZ._candZ, HZ._candSkipOrd, HZ._candBest = 0, 0, 0
+    -- 候选表构建：新骨架不再用它选人（改为格子发单时现场挑），
+    -- 代码保留，开关关掉，避免每 2 秒白扫一遍全快照。
+    local USE_CAND_BUILD = false
+    if USE_CAND_BUILD then
     for i = 1, snap.n do
         local z = snap.obj[i]
         if z then HZ._candZ = HZ._candZ + 1 end
@@ -703,6 +707,7 @@ function HZ.v2Cycle()
                 best.candSet[z] = true
             end
         end
+    end
     end
 end
 
