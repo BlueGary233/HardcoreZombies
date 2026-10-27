@@ -579,7 +579,12 @@ function HZ.v2Cycle()
         local z = snap.obj[i]
         if z then HZ._candZ = HZ._candZ + 1 end
         if z and (HZ._orders and HZ._orders[z]) then HZ._candSkipOrd = HZ._candSkipOrd + 1 end
-        if z and not taken[z] and not (HZ._orders and HZ._orders[z]) then
+        local lureUntil = HZ._lureUntil and HZ._lureUntil[z]
+        if lureUntil and lureUntil < getTimestampMs() then
+            HZ._lureUntil[z] = nil
+            lureUntil = nil
+        end
+        if z and not taken[z] and not lureUntil and not (HZ._orders and HZ._orders[z]) then
             local x, y = snap.x[i], snap.y[i]
             local best, bestD = nil, nil
             for k = 1, #piles do
@@ -1083,6 +1088,25 @@ function HZ.tickOrder(z, ord, now)
         end)
         if tx and ty then
             onTarget = (math.abs(tx - bx) < 0.75 and math.abs(ty - by) < 0.75)
+        end
+
+        -- 被玩家/声音拉走：寻路目标不是尸体，而且距离还在变大。
+        -- 这种状态下怎么重下发都没用（引擎会重新追目标），订单必须放掉，
+        -- 否则餐位被一个正在追玩家的丧尸永久占着。
+        local goalIsBody = onTarget
+        if (not goalIsBody) and ord.lastD and d > ord.lastD then
+            ord.lureN = (ord.lureN or 0) + 1
+        else
+            ord.lureN = 0
+        end
+        if (ord.lureN or 0) >= 6 then          -- 连续 6 拍（约 12 秒）都在变远
+            HZ._cLured = (HZ._cLured or 0) + 1
+            HZ.releaseOrder(z, ord, false)
+            -- 它还在堆的半径内，不放冷却的话下一轮立刻又被派回来（追人→释放→再派），
+            -- 白白占着餐位还每 12 秒重复一遍。给 30 秒冷静期。
+            HZ._lureUntil = HZ._lureUntil or {}
+            HZ._lureUntil[z] = getTimestampMs() + 30000
+            return
         end
 
         -- 目标对、但距离在变大：被追击目标接管了，抢回控制
