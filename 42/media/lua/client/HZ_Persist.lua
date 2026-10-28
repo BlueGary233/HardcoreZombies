@@ -19,10 +19,13 @@ local VER      = 1              -- 格式版本；读到不认识的就整块丢
 local MATCH_R  = 3.0            -- 匹配半径（格）
 local MAX_LIST = 4000           -- 上限，防止异常数据把存档撑爆
 
+-- 全局 modData（存档里的 global_mod_data.bin）。
+-- IsoWorld 没有 getModData()，正确入口是 Lua 全局 ModData.getOrCreate(name)。
+local GLOBAL_KEY = "HardcoreZombies"
+
 local function worldModData()
-    local w = getWorld and getWorld()
-    if not w then return nil end
-    local ok, md = pcall(function() return w:getModData() end)
+    if not ModData or not ModData.getOrCreate then return nil end
+    local ok, md = pcall(function() return ModData.getOrCreate(GLOBAL_KEY) end)
     if not ok or not md then return nil end
     return md
 end
