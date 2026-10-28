@@ -588,17 +588,12 @@ local function processEntry(z, s, nowH, dh)
     end
     s.stage = stageOfNut(s.nutrition)   -- 仅供 HUD 显示
 
-    -- 装死标记回收：引擎那边已经起身（isFakeDead 变 false）就清掉我们的一次性标记，
-    -- 否则这只丧尸再饿也永远不会重新装死
-    if s.fakeDead then
-        local still = nil
-        HZ.try("fakeDeadChk", function() still = (z:isFakeDead() == true) end)
-        if still == false then s.fakeDead = false end
-    end
-
-    -- 饿死：营养见底只设一次装死（走引擎生成器那套：低血 + 躺姿 + fakeDead），之后全交给引擎
-    if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
-        s.fakeDead = true
+    -- 装死：每轮饥饿只装一次。重新武装的条件是"吃饱过"（营养 > 0.5），
+    -- 这样既能让复活的丧尸再次装死，又不会醒来后营养还见底就立刻又躺下。
+    if s.canFakeDead == nil then s.canFakeDead = true end    -- 新条目默认有一次机会
+    if s.nutrition > 0.5 then s.canFakeDead = true end
+    if HZ_fakeDead and s.canFakeDead and s.nutrition <= 0.01 then
+        s.canFakeDead = false
         HZ.try("fakeDeadOn", function() HZ_fakeDead(z) end)
     end
 
