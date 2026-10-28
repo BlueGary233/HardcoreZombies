@@ -261,7 +261,7 @@ end
 
 -- 改数据 + 写回引擎
 local function applyFive(uid, f)
-    if HZ_applyStats then pcall(HZ_applyStats, uid, f.h, f.sp, f.st, f.si, f.he) end
+    if HZ_applyStats then pcall(HZ_applyStats, uid, f.h, f.st, f.si, f.he) end
 end
 
 -- 单维上升一格并写回引擎
@@ -343,16 +343,12 @@ local function changedNoSpeed(a, b)
 end
 
 -- 档位和目标不符才调一次桥（桥内部会连带 speedMod / walkVariant / walkType / turnDelta）
-function HZ.setModTier(z, tier, s)
+function HZ.setModTier(z, tier)
     tier = tonumber(tier)
     if not tier or tier < 1 or tier > MAX_TIER then return false end
-    if readTier(z) == tier then
-        if s then s.modTier = tier end
-        return true
-    end
+    if readTier(z) == tier then return true end
     local ok = false
     if HZ_applyTier then ok = HZ.try("applyTier", function() return HZ_applyTier(z, tier) end) or false end
-    if s then s.modTier = tier end
     if HZ.debugEnabled and HZ.debugEnabled() and HZ.due("tierLog", 3000) then
         HZ.log(string.format("modSpeedType -> %d uid=%s ok=%s", tier, tostring(HZ.uidOf and HZ.uidOf(z)), tostring(ok)))
     end
@@ -393,7 +389,6 @@ local function getEntry(z)
         stage       = stageOf(base),
         lastHours   = nil,
         five        = snapshot(z),
-        modTier     = readTier(z),      -- 初始档位 = 引擎现状（原版假跑尸保持 4 档）
         x           = (function() local ok,v = pcall(function() return z:getX() end); return ok and v or 0 end)(),
         y           = (function() local ok,v = pcall(function() return z:getY() end); return ok and v or 0 end)(),
         eatingSince = nil,
@@ -546,7 +541,7 @@ local function processEntry(z, s, nowH, dh)
     -- 档位 = 速度维反推（sp 1→4 假跑尸 / 2→3 跑尸 / 3→2 快走 / 4→1 慢尸）
     local want = 5 - (s.five and s.five.sp or S_MAX)
     if want < 1 then want = 1 elseif want > MAX_TIER then want = MAX_TIER end
-    if readTier(z) ~= want then HZ.setModTier(z, want, s) end
+    if readTier(z) ~= want then HZ.setModTier(z, want) end
 end
 
 -- 一轮维护 = 一个快照周期内把 N 只各过一遍
@@ -666,7 +661,6 @@ function HZ.statsTrackByDiff(z, packed)
 
     -- 建好条目立刻按当前条件写一次 buff（把重载/读档留下的旧值纠正过来）
     if HZ.refreshBuffs then HZ.refreshBuffs(z) end
-    s.modTier = readTier(z)      -- 初始档位 = 引擎现状（原版假跑尸保持 4 档）
     return s
 end
 

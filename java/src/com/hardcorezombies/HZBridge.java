@@ -132,37 +132,16 @@ public class HZBridge {
     }
 
     // ===================== 丧尸三维（营养系统用） =====================
-    /** speedType：1=最快 3=最慢 */
-    @LuaMethod(name = "HZ_getSpeedType", global = true)
-    public static int getSpeedType(IsoZombie z) {
-        return z == null ? 3 : z.speedType;
-    }
-
-    @LuaMethod(name = "HZ_setSpeedType", global = true)
-    public static void setSpeedType(IsoZombie z, int v) {
-        if (z != null) z.speedType = v;
-    }
-
     /** strength：5 最强，1 最弱（1~5；Thump 伤害倍率） */
     @LuaMethod(name = "HZ_getStrength", global = true)
     public static int getStrength(IsoZombie z) {
         return z == null ? 1 : z.strength;
     }
 
-    @LuaMethod(name = "HZ_setStrength", global = true)
-    public static void setStrength(IsoZombie z, int v) {
-        if (z != null) z.strength = v;
-    }
-
     /** sight：1 最好，3 最差 */
     @LuaMethod(name = "HZ_getSight", global = true)
     public static int getSight(IsoZombie z) {
         return z == null ? 3 : z.sight;
-    }
-
-    @LuaMethod(name = "HZ_setSight", global = true)
-    public static void setSight(IsoZombie z, int v) {
-        if (z != null) z.sight = v;
     }
 
     /** hearing：1 最好（pinpoint），3 最差 */
@@ -181,11 +160,6 @@ public class HZBridge {
         } catch (Throwable t) {
             return "";
         }
-    }
-
-    @LuaMethod(name = "HZ_setHearing", global = true)
-    public static void setHearing(IsoZombie z, int v) {
-        if (z != null) z.hearing = v;
     }
 
     /** 按格子 + UID 找僵尸（含已死）；找不到返回 null（区块卸载） */
@@ -359,7 +333,7 @@ public class HZBridge {
 
     /** 按 uid 写回五维（跨阈值成长用）；找不到对象返回 false */
     @LuaMethod(name = "HZ_applyStats", global = true)
-    public static boolean applyStats(String uid, float hp, int sp, int st, int si, int he) {
+    public static boolean applyStats(String uid, float hp, int st, int si, int he) {
         if (uid == null) return false;
         IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.getCell();
         if (cell == null) return false;
@@ -424,21 +398,6 @@ public class HZBridge {
         } catch (Throwable t) {
             return false;
         }
-    }
-
-    /**
-     * 让这只丧尸进入"跑尸"状态。
-     * 等价于引擎的 doSprinter()：speedType=1、speedMod 0.85~1.00、
-     * walkVariant=ZombieWalk2、lunger=true，并同步精灵动画速率。
-     * 只做赋值，不参与任何判定。
-     */
-    @LuaMethod(name = "HZ_applySprint", global = true)
-    public static void applySprint(IsoZombie z) {
-        if (z == null) return;
-        // 直接调引擎自己的 doSprinter()：speedType=1、speedMod、ZombieWalk2、
-        // 精灵帧速率、walkType、turnDelta 全部由引擎按原版逻辑设置。
-        // 手写那几项在 def 为空时会漏掉动画，表现就是"属性对了但走不快"。
-        try { z.doSprinter(); } catch (Throwable t) { }
     }
 
     /** 丧尸 uid -> {x,y}（仅调试 HUD 用，调用方保证只在调试模式） */
