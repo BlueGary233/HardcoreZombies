@@ -16,3 +16,13 @@ audit_*
 
 # Java 编译产物（jar 由源码构建）
 42/media/java/*.jar
+
+# 构建产物
+/out/
+
+# 设计文档 / 开发脚本 / 编辑器桩（只留本地，不进版本库）
+docs/
+stubs/
+tools/
+HZ_*.md
+/out/
