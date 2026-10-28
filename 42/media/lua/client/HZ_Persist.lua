@@ -24,7 +24,13 @@ local MAX_LIST = 4000           -- 上限，防止异常数据把存档撑爆
 local GLOBAL_KEY = "HardcoreZombies"
 
 local function worldModData()
-    if not ModData or not ModData.getOrCreate then return nil end
+    if not ModData or not ModData.getOrCreate then
+        if not HZ._persistNoModData then
+            HZ._persistNoModData = true
+            HZ.log("persist: ModData 不可用，持久化关闭")
+        end
+        return nil
+    end
     local ok, md = pcall(function() return ModData.getOrCreate(GLOBAL_KEY) end)
     if not ok or not md then return nil end
     return md
