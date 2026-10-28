@@ -129,7 +129,7 @@ local OPT_DEFAULTS = {
     PendingRetryMs = 2000, PendingGiveupMs = 10000,
     DebugScanRadius = 20, DebugSnapMinutes = 10,
     FakeDeadFood = false, DebugMode = false, Snap = false,
-    FakeDeadStarved = true, FakeDeadStuffed = true,
+    FakeDeadStarved = true,
     SnapPerPile = 2,
 }
 

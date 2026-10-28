@@ -67,7 +67,5 @@
     "UI_HZ_SnapPerPile": "Zombie table refresh multiplier",
     "UI_HZ_SnapPerPile_tip": "Position snapshot = action interval x N (default 2 = 4s). Fresher table = more accurate dispatch, older = cheaper. Integer multiple, so it never drifts against the action beat.",
     "UI_HZ_FakeDeadStarved": "Fake dead when starving",
-    "UI_HZ_FakeDeadStarved_tip": "Zombies at zero nutrition (<=0.01) lie down looking like corpses and get up when the player comes close. Once per starvation cycle; re-armed only after nutrition climbs back above 0.5.",
-    "UI_HZ_FakeDeadStuffed": "Fake dead when well fed",
-    "UI_HZ_FakeDeadStuffed_tip": "Zombies at full nutrition (>=5.00) play dead like an untouched corpse and get up when the player approaches, at that moment they are a maxed-out zombie. Re-armed only after nutrition drops below 4.75."
+    "UI_HZ_FakeDeadStarved_tip": "Zombies at zero nutrition (<=0.01) lie down looking like corpses and get up when the player comes close. Once per starvation cycle; re-armed only after nutrition climbs back above 0.5."
 }

@@ -588,21 +588,21 @@ local function processEntry(z, s, nowH, dh)
     end
     s.stage = stageOfNut(s.nutrition)   -- 仅供 HUD 显示
 
-    -- 装死：每轮只装一次，两端都能触发
-    --   见底（≤0.01）→ 饿殍装死
-    --   吃满（≥5.00）→ 满营养装死，玩家靠近时复活成满档丧尸（跳脸）
-    -- 重新武装条件：营养落在中间带（0.5 ~ 4.75），也就是"既没饿死也没吃满"
-    if s.canFakeDead == nil then s.canFakeDead = true end    -- 新条目默认有一次机会
-    if s.nutrition > 0.5 and s.nutrition < 4.75 then s.canFakeDead = true end
-
-    local starved = (s.nutrition <= 0.01) and (HZ.opt.FakeDeadStarved ~= false)
-    local stuffed = (s.nutrition >= MAX_NUT)  and (HZ.opt.FakeDeadStuffed ~= false)
-    if HZ_fakeDead and s.canFakeDead and (starved or stuffed) then
+    -- 饿死装死：走引擎自己的路 —— 先打假死标记，再让它正常死亡变成尸体。
+    -- IsoDeadBody 的构造器会把 zombie.isFakeDead() 复制到尸体上，所以顺序不能反。
+    -- 尸体能进存档；玩家靠近 + 0.5 游戏小时后引擎自己 reanimate()。
+    if s.canFakeDead == nil then s.canFakeDead = true end
+    if HZ.opt.FakeDeadStarved ~= false and s.canFakeDead and s.nutrition <= 0.01 then
         s.canFakeDead = false
-        HZ.try("fakeDeadOn", function() HZ_fakeDead(z) end)
+        local ok = false
+        HZ.try("fakeDeadCorpse", function()
+            z:setFakeDead(true)     -- 必须在 Kill 之前
+            z:Kill(nil)
+            ok = true
+        end)
         if HZ.log then
-            HZ.log(string.format("fake dead: %s uid=%s nut=%.2f",
-                stuffed and "stuffed" or "starved", tostring(s.uid), s.nutrition))
+            HZ.log(string.format("fake dead: corpse uid=%s nut=%.2f ok=%s",
+                tostring(s.uid), s.nutrition, tostring(ok)))
         end
     end
 

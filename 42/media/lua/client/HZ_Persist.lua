@@ -146,21 +146,6 @@ end
 if not HZ._persistHooked then
     HZ._persistHooked = true
     Events.OnSave.Add(function()
-        -- 先摘掉假死标记：引擎写盘在 OnSave 之后，带标记的活丧尸读档会丢
-        local n, failed = 0, 0
-        local t = HZ._zstats
-        if type(t) == "table" then
-            for z, s in pairs(t) do
-                if s and s.canFakeDead == false then
-                    local ok = pcall(function() z:setFakeDead(false) end)
-                    if ok then n = n + 1 else failed = failed + 1 end
-                end
-            end
-        end
-        if n > 0 or failed > 0 then
-            HZ.log(string.format("persist: fake dead cleared %d (failed %d)", n, failed))
-        end
-
         local ok, err = pcall(HZ.persistWrite)
         if not ok then HZ.log("persist: write failed: " .. tostring(err)) end
     end)
