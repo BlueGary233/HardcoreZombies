@@ -385,19 +385,18 @@ public class HZBridge {
     }
 
     /**
-     * 装死：照抄引擎生成器 ZombiePopulationManager.addZombieStanding() 对假死丧尸做的三件事
-     *   ① setHealth(0.5 + Rand.Next(0.3))   低血（所以很快会死成尸体，才有死亡惨叫/进尸堆）
-     *   ② sprite = legsSprite               躺姿
-     *   ③ setFakeDead(true)                 标记；死亡时 IsoDeadBody 构造器会把它复制到尸体上
-     * 之后全交给引擎：IsoDeadBody.updateBodies() → updateFakeDead()（死亡 0.5 小时后、玩家靠近）
-     * → reanimateNow() 复活。
+     * 装死：只打标记，别的都交给引擎。
+     *
+     * 引擎自己的链路（已按字节码确认）：
+     *   ZombieOnGroundState.enter()：if (isDead() || isFakeDead()) { die(); return; }
+     *   → IsoGameCharacter.die() → becomeCorpse() → new IsoDeadBody(this)
+     *   → IsoDeadBody 构造器把 zombie.isFakeDead() 复制到尸体的 fakeDead
+     *   → IsoDeadBody.updateFakeDead()：死亡 0.5 小时后、玩家（非隐身）靠近 → reanimateNow()
      */
     @LuaMethod(name = "HZ_fakeDead", global = true)
     public static boolean fakeDead(IsoZombie z) {
         if (z == null || z.isDead()) return false;
         try {
-            z.setHealth(0.5f + zombie.core.random.Rand.Next(0.3f));
-            if (z.legsSprite != null && z.sprite != z.legsSprite) z.sprite = z.legsSprite;
             z.setFakeDead(true);
             return true;
         } catch (Throwable t) {
