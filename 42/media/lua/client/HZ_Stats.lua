@@ -1,11 +1,11 @@
 -- HZ_Stats.lua — 饱食度 / 营养进度 / 五维成长
 --
 -- 设计（O 定稿 2026-10-23）：
---   五维：health(0.5~4.0, 步进0.5, 7次) / speedType(3->1, 2次) /
---         strength(1->5, 4次) / sight(3->1, 2次) / hearing(3->1, 2次)  = 17 次
+--   五维：health(0.5~4.0, 步进0.5, 7次) / speedType(4->1, 3次：假跑/跑/快走/慢) /
+--         strength(1->5, 4次) / sight(3->1, 2次) / hearing(3->1, 2次)  = 18 次
 --   营养值 nutrition：吃/饿推动，0~5，唯一状态
---   阶段：stage = clamp(floor((nutrition - 0.5) / 0.25), 0, 17)
---         营养 0.5 以下 = 五维锁最低；4.75 以上 = 锁最高
+--   阶段：stage = clamp(floor((nutrition - 0.25) / 0.25), 0, 18)
+--         营养 0.25 以下 = 五维锁最低；4.75 以上 = 锁最高
 --   每小时维护顺序：①五维与快照比 → 变了记 flag；②消化/饿推动 nutrition；③跨阈值随机调五维；④flag 为真则 nutrition = f(五维) 校准
 --   阶段跨一次：从「还有缺口」的维度随机挑一个 +-1（满的不参与，不超限）
 --   饱食度：吃满一具 = +5；满 5 锁定拒食/闻不到味，<2 解锁
@@ -16,14 +16,13 @@ local HZ = HardcoreZombies
 
 local MAX_SAT = 5
 local MAX_NUT = 5
-local RUN_NUT = 4.5      -- 营养 >= 这个值 → 跑尸（满值 5.0，留一点余量）
 local MAX_TIER = 4       -- modSpeedType：1 慢尸 / 2 快走尸 / 3 跑尸 / 4 假跑尸
 local NUT_STEP = 0.25
-local NUT_LO, NUT_HI = 0.5, 4.75
-local STAGES = 17
+local NUT_LO, NUT_HI = 0.25, 4.75
+local STAGES = 18
 
 local H_BASE, H_MAX = 0.5, 4.0
-local S_MIN,  S_MAX  = 1, 3
+local S_MIN,  S_MAX  = 1, 4      -- 速度 4 档：1 假跑尸 / 2 跑尸 / 3 快走 / 4 慢尸（数越小越快）
 local T_MIN,  T_MAX  = 1, 5      -- strength：5 最强，1 最弱（Thump 伤害倍率）
 local V_MIN,  V_MAX  = 1, 3
 local E_MIN,  E_MAX  = 1, 3
@@ -143,13 +142,22 @@ local function setHealth(z, v)
     pcall(function() z:setHealth(clampv(v, H_BASE, H_MAX, H_BASE)) end)
 end
 
--- 读速度等级：1 最快，3 最慢
+-- ===================== modSpeedType（4 档） =====================
+-- 引擎没有"假跑尸"标志位，但 (speedType, walkVariant) 能唯一反推：
+--   1 + ZombieWalk1 = 4 假跑尸     1 + ZombieWalk2 = 3 跑尸
+--   2 + ZombieWalk2 = 2 快走尸     3 + ZombieWalk1 = 1 慢尸
+local function readTier(z)
+    local st, wv
+    HZ.try("readTier", function() st = z:getSpeedType(); wv = z.walkVariant end)
+    st = tonumber(st)
+    if st == 1 then return (wv == "ZombieWalk1") and 4 or 3 end
+    if st == 2 then return 2 end
+    return 1
+end
+
+-- 读速度维：档位反过来当数据值（1 假跑尸 = 最快，4 慢尸 = 最慢）
 local function getSpeed(z)
-    if HZ_getSpeedType then
-        local ok, v = pcall(HZ_getSpeedType, z)
-        if ok then return clampv(v, S_MIN, S_MAX, S_MAX) end
-    end
-    return S_MAX
+    return clampv(5 - readTier(z), S_MIN, S_MAX, S_MAX)
 end
 -- 读力量：5 最强，1 最弱
 local function getStrength(z)
@@ -176,8 +184,8 @@ local function getHearing(z)
     return E_MAX
 end
 -- ===================== 营养 <-> 五维 =====================
--- 五维一共 17 档：health 7 / speed 2 / strength 4 / sight 2 / hearing 2
--- 每档 = 0.25 营养，所以 f(五维) = 0.5 + 0.25 × 已完成的档数（0.5 ~ 4.75）
+-- 五维一共 18 档：health 7 / speed 3 / strength 4 / sight 2 / hearing 2
+-- 每档 = 0.25 营养，所以 f(五维) = 0.25 + 0.25 × 已完成的档数（0.25 ~ 4.75）
 local function doneSteps(z)
     local n = 0
 
@@ -334,19 +342,6 @@ local function changedNoSpeed(a, b)
         or math.abs((a.he or 0) - (b.he or 0)) > 0.01
 end
 
--- ===================== modSpeedType（4 档） =====================
--- 引擎没有"假跑尸"标志位，但 (speedType, walkVariant) 能唯一反推：
---   1 + ZombieWalk1 = 4 假跑尸     1 + ZombieWalk2 = 3 跑尸
---   2 + ZombieWalk2 = 2 快走尸     3 + ZombieWalk1 = 1 慢尸
-local function readTier(z)
-    local st, wv
-    HZ.try("readTier", function() st = z:getSpeedType(); wv = z.walkVariant end)
-    st = tonumber(st)
-    if st == 1 then return (wv == "ZombieWalk1") and 4 or 3 end
-    if st == 2 then return 2 end
-    return 1
-end
-
 -- 档位和目标不符才调一次桥（桥内部会连带 speedMod / walkVariant / walkType / turnDelta）
 function HZ.setModTier(z, tier, s)
     tier = tonumber(tier)
@@ -398,6 +393,7 @@ local function getEntry(z)
         stage       = stageOf(base),
         lastHours   = nil,
         five        = snapshot(z),
+        modTier     = readTier(z),      -- 初始档位 = 引擎现状（原版假跑尸保持 4 档）
         x           = (function() local ok,v = pcall(function() return z:getX() end); return ok and v or 0 end)(),
         y           = (function() local ok,v = pcall(function() return z:getY() end); return ok and v or 0 end)(),
         eatingSince = nil,
@@ -541,15 +537,9 @@ local function processEntry(z, s, nowH, dh)
         s.stage = s.stage - 1
     end
 
-    -- 档位维护：满营养 → 3 档（跑尸）；不够满 → 按速度维反推（sp 1→3、2→2、3→1）。
-    -- 4 档（假跑尸）不由营养推：原版生成时就带假跑尸，营养掉下来才会被拉低。
-    local want
-    if s.nutrition >= RUN_NUT then
-        want = 3
-    else
-        want = 4 - (s.five and s.five.sp or S_MAX)
-        if want < 1 then want = 1 elseif want > 3 then want = 3 end
-    end
+    -- 档位 = 速度维反推（sp 1→4 假跑尸 / 2→3 跑尸 / 3→2 快走 / 4→1 慢尸）
+    local want = 5 - (s.five and s.five.sp or S_MAX)
+    if want < 1 then want = 1 elseif want > MAX_TIER then want = MAX_TIER end
     if readTier(z) ~= want then HZ.setModTier(z, want, s) end
 end
 
@@ -643,7 +633,7 @@ function HZ.statsTrackByDiff(z, packed)
     end
 
     local hN  = clampv(tonumber(hp), H_BASE, H_MAX, H_BASE)
-    local spN = clampv(tonumber(sp), S_MIN,  S_MAX, S_MAX)
+    local spN = clampv(5 - readTier(z), S_MIN, S_MAX, S_MAX)   -- 速度维 = 档位反推（原版假跑尸 = 1）
     local stN = clampv(tonumber(st), T_MIN,  T_MAX, T_MIN)
     local siN = clampv(tonumber(si), V_MIN,  V_MAX, V_MAX)
     local heN = clampv(tonumber(he), E_MIN,  E_MAX, E_MAX)
