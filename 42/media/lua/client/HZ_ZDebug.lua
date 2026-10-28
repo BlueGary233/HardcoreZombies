@@ -124,6 +124,8 @@ end
 -- 快照 mod 内部结构
 local function snapshotTables(out)
     out[#out + 1] = ""
+    out[#out + 1] = "UIDHIT " .. tostring(HZ._uidHit or 0) .. "  (_byUid 兜底命中次数，长期为 0 说明包装不会换)"
+    out[#out + 1] = ""
     out[#out + 1] = "===== PILES (" .. #(HZ.piles or {}) .. ") ====="
 
     for i, p in ipairs(HZ.piles or {}) do

@@ -383,6 +383,15 @@ function HZ.statsRestore(z, rec, packed)
     return true
 end
 
+-- 探针：_zstats[z] miss 但 _byUid[uid] 命中 = "Lua 包装会换"这个假设成立。
+-- 一整局都是 0 的话，_byUid 那套兜底可以删。
+local function uidHitProbe(tag, uid)
+    HZ._uidHit = (HZ._uidHit or 0) + 1
+    if HZ.log then
+        HZ.log(string.format("uidHit[%s] count=%d uid=%s", tag, HZ._uidHit, tostring(uid)))
+    end
+end
+
 -- ===================== 条目（僵尸对象作 key） =====================
 -- 对象就是指针，拿它当 key；对象失效（getUID 拿不到）即出表。
 
@@ -400,6 +409,7 @@ local function getEntry(z)
 
     s = HZ._byUid and HZ._byUid[uid]
     if s then
+        uidHitProbe("entry", uid)
         HZ._zstats[z] = s              -- 顺手登记对象 key，下次免 uid
         s.obj = z
         return s
@@ -648,6 +658,7 @@ function HZ.statsTrackByDiff(z, packed)
     -- 同一 uid 的旧条目（Lua 包装换过）：迁到新对象 key
     s = HZ._byUid[uid]
     if s then
+        uidHitProbe("track", uid)
         HZ._zstats[z] = s
         s.obj = z
         return s
@@ -699,7 +710,10 @@ function HZ.statsDropByDiff(z)
 
     if not s then
         local uid = HZ.uidOf(z)
-        if uid and HZ._byUid then s = HZ._byUid[uid] end
+        if uid and HZ._byUid then
+            s = HZ._byUid[uid]
+            if s then uidHitProbe("drop", uid) end
+        end
     end
 
     if s then
