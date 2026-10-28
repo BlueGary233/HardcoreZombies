@@ -381,12 +381,13 @@ local function getEntry(z)
     HZ._byUid  = HZ._byUid  or {}
 
     local sat0, nutK = initValues()
-    local base = snap(actualNutrition(z) * nutK)
+    local raw  = actualNutrition(z)                -- f(五维)，未乘衰减系数
+    local base = snap(raw * nutK)                  -- 乘衰减系数 = 实际营养
     s = {
         uid         = uid,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageOf(base),
+        stage       = stageOf(raw),     -- 档位按身体算：随后 processEntry 用随机增减把五维对齐到营养档
         lastHours   = nil,
         five        = snapshot(z),
         x           = (function() local ok,v = pcall(function() return z:getX() end); return ok and v or 0 end)(),
@@ -513,23 +514,28 @@ local function processEntry(z, s, nowH, dh)
     -- 听力：统一入口。状态 = 在队列(认领中) 或 饱食 > 2，条件不变就不写桥
     if HZ.refreshBuffs then HZ.refreshBuffs(z) end
 
-    -- 跨阈值 -> 随机调五维
+    -- 跨阈值 -> 随机调五维。每拍最多 4 格：调一格 = 一次 applyStats（内部要线性找 uid），
+    -- 新进档的丧尸一上来可能差十几档，一次全打会很贵。
     local want = stageOf(s.nutrition)
-    while s.stage < want do
+    local step = 0
+    while s.stage < want and step < 4 do
         if not adjustStats(s.uid, s, 1) then
             s.nutrition = snap(nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he))
             s.stage = stageOf(s.nutrition)
             break
         end
         s.stage = s.stage + 1
+        step = step + 1
     end
-    while s.stage > want do
+    step = 0
+    while s.stage > want and step < 4 do
         if not adjustStats(s.uid, s, -1) then
             s.nutrition = snap(nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he))
             s.stage = stageOf(s.nutrition)
             break
         end
         s.stage = s.stage - 1
+        step = step + 1
     end
 
     -- 饿死：营养见底只设一次装死（走引擎生成器那套：低血 + 躺姿 + fakeDead），之后全交给引擎
@@ -539,9 +545,9 @@ local function processEntry(z, s, nowH, dh)
     end
 
     -- 档位 = 速度维反推（sp 1→4 假跑尸 / 2→3 跑尸 / 3→2 快走 / 4→1 慢尸）
-    local want = 5 - (s.five and s.five.sp or S_MAX)
-    if want < 1 then want = 1 elseif want > MAX_TIER then want = MAX_TIER end
-    if readTier(z) ~= want then HZ.setModTier(z, want) end
+    local wantTier = 5 - (s.five and s.five.sp or S_MAX)
+    if wantTier < 1 then wantTier = 1 elseif wantTier > MAX_TIER then wantTier = MAX_TIER end
+    if readTier(z) ~= wantTier then HZ.setModTier(z, wantTier) end
 end
 
 -- 一轮维护 = 一个快照周期内把 N 只各过一遍
@@ -640,14 +646,15 @@ function HZ.statsTrackByDiff(z, packed)
     local heN = clampv(tonumber(he), E_MIN,  E_MAX, E_MAX)
 
     local sat0, nutK = initValues()
-    local base = snap(nutritionFromFive(hN, spN, stN, siN, heN) * nutK)
+    local raw  = nutritionFromFive(hN, spN, stN, siN, heN)
+    local base = snap(raw * nutK)
 
     s = {
         uid         = uid,
         obj         = z,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageOf(base),
+        stage       = stageOf(raw),     -- 档位按身体算：随后 processEntry 用随机增减把五维对齐到营养档
         lastHours   = nil,          -- 第一次轮到只校准、不打分
         five        = { h = hN, sp = spN, st = stN, si = siN, he = heN },
         x           = 0,            -- 坐标不随 diff 传；小时校准/调试时现取
