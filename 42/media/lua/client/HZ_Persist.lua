@@ -37,13 +37,27 @@ local function worldModData()
 end
 
 -- 存：OnSave 时调用。现拉快照，保证坐标和这次存档同一瞬间。
+-- 快照失败重试次数：写不进去就别把旧数据留在档里
+local WRITE_TRIES = 5
+
 function HZ.persistWrite()
     local md = worldModData()
     if not md then return end
 
-    HZ.pullSnapshot()                       -- 全量，一次 JNI；存档期间这点开销可忽略
-    local snap = HZ._snap
-    if not snap or (snap.n or 0) == 0 then return end
+    -- 全量快照（一次 JNI，存档期间可忽略）。失败就重试，避免存进去的是过期坐标。
+    local snap
+    for attempt = 1, WRITE_TRIES do
+        HZ.pullSnapshot()
+        local s0 = HZ._snap
+        if s0 and (s0.n or 0) > 0 then snap = s0 break end
+        HZ.log(string.format("persist: snapshot attempt %d/%d failed", attempt, WRITE_TRIES))
+    end
+
+    if not snap then
+        md[KEY] = nil
+        HZ.log("persist: no snapshot after " .. WRITE_TRIES .. " tries, cleared saved data")
+        return
+    end
 
     local list = {}
     local stats = HZ._zstats or {}

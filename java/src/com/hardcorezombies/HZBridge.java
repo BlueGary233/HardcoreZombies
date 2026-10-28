@@ -162,26 +162,6 @@ public class HZBridge {
         }
     }
 
-    /** 按格子 + UID 找僵尸（含已死）；找不到返回 null（区块卸载） */
-    @LuaMethod(name = "HZ_findZombie", global = true)
-    public static IsoZombie findZombie(int x, int y, int z, String uid) {
-        if (uid == null) return null;
-        IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.getCell();
-        if (cell == null) return null;
-        IsoGridSquare sq = cell.getGridSquare(x, y, z);
-        if (sq == null) return null;
-        List<IsoMovingObject> mos = sq.getMovingObjects();
-        if (mos == null) return null;
-        for (int i = 0; i < mos.size(); i++) {
-            IsoMovingObject mo = mos.get(i);
-            if (mo instanceof IsoZombie) {
-                IsoZombie zb = (IsoZombie) mo;
-                if (uid.equals(zb.getUID())) return zb;
-            }
-        }
-        return null;
-    }
-
     /** 返回引擎当前所有活动僵尸的 ArrayList（反射取 IsoCell.zombieList） */
     @LuaMethod(name = "HZ_allZombies", global = true)
     public static Object allZombies() {
@@ -194,22 +174,6 @@ public class HZBridge {
         } catch (Throwable t) {
             return null;
         }
-    }
-
-    /** 全部加载区僵尸（遍历 IsoCell.objectList，不是渲染列表） */
-    @LuaMethod(name = "HZ_getAllZombies", global = true)
-    public static List<IsoZombie> getAllZombies() {
-        List<IsoZombie> out = new ArrayList<>();
-        try {
-            IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.getCell();
-            if (cell == null) return out;
-            for (IsoMovingObject o : cell.getObjectList()) {
-                if (o instanceof IsoZombie) out.add((IsoZombie) o);
-            }
-        } catch (Throwable t) {
-            // ignore
-        }
-        return out;
     }
 
     // ===================== 共享工具 =====================
@@ -389,24 +353,4 @@ public class HZBridge {
         }
     }
 
-    /** 丧尸 uid -> {x,y}（仅调试 HUD 用，调用方保证只在调试模式） */
-    @LuaMethod(name = "HZ_zombiePositions", global = true)
-    public static KahluaTable zombiePositions() {
-        KahluaTable out = newTable();
-        IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.getCell();
-        if (cell == null) return out;
-
-        for (IsoMovingObject o : cell.getObjectList()) {
-            if (!(o instanceof IsoZombie)) continue;
-            IsoZombie z = (IsoZombie) o;
-            String uid = z.getUID();
-            if (uid == null) continue;
-
-            KahluaTable e = newTable();
-            e.rawset("x", (double) z.getX());
-            e.rawset("y", (double) z.getY());
-            out.rawset(uid, e);
-        }
-        return out;
-    }
 }
