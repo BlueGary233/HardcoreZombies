@@ -47,14 +47,10 @@ function HZ.persistWrite()
 
     local list = {}
     local stats = HZ._zstats or {}
-    local seen = {}
-
-    -- ① 本次快照里的丧尸：坐标最新
     for i = 1, snap.n do
         local z = snap.obj[i]
         local s = z and stats[z]
         if s and s.five then
-            seen[z] = true
             list[#list + 1] = {
                 x = snap.x[i], y = snap.y[i],
                 nut = s.nutrition, sat = s.satiety,
@@ -62,24 +58,6 @@ function HZ.persistWrite()
                 si = s.five.si, he = s.five.he,
             }
             if #list >= MAX_LIST then break end
-        end
-    end
-
-    -- ② 有条目但这一拍不在快照里（加载区边缘）：用条目里记的上次坐标补漏。
-    --    不补的话，这些丧尸重载后会被当成新丧尸重新初始化（营养/饱食跳变）。
-    if #list < MAX_LIST then
-        for z, s in pairs(stats) do
-            if not seen[z] and s and s.five
-               and tonumber(s.x) and tonumber(s.y)
-               and (s.x ~= 0 or s.y ~= 0) then
-                list[#list + 1] = {
-                    x = s.x, y = s.y,
-                    nut = s.nutrition, sat = s.satiety,
-                    h = s.five.h, sp = s.five.sp, st = s.five.st,
-                    si = s.five.si, he = s.five.he,
-                }
-                if #list >= MAX_LIST then break end
-            end
         end
     end
 
@@ -138,18 +116,6 @@ function HZ.persistRestore()
                 end
             else
                 missed = missed + 1
-                if missed <= 3 and HZ.debugEnabled and HZ.debugEnabled() then
-                    -- 诊断：最近的一只离多远（判定是"走远了"还是"根本没生成"）
-                    local nd = 1e18
-                    for i = 1, snap.n do
-                        local dx = (snap.x[i] or 0) - rec.x
-                        local dy = (snap.y[i] or 0) - rec.y
-                        local d = dx * dx + dy * dy
-                        if d < nd then nd = d end
-                    end
-                    HZ.log(string.format("persist: miss rec=(%.1f,%.1f) nearest=%.1f tiles",
-                        rec.x, rec.y, math.sqrt(nd)))
-                end
             end
         end
     end
