@@ -60,6 +60,7 @@ local BUSY_STATE = {
     CollideWithWallState = 1, LungeState = 1,
     -- 2 = 只 busy、不推：砸门/攻击有自己的进度，推了等于打断
     ThumpState = 2, AttackState = 2, SmashWindowState = 2,
+    FakeDeadZombieState = 2,      -- 营养归零装死：别导航、别推
 }
 
 -- 空转状态：路径走完、状态机停在原地没往下走（推一把就能救的就是这些）

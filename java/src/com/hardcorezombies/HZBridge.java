@@ -384,6 +384,27 @@ public class HZBridge {
     }
 
     /**
+     * 装死 / 起身。
+     *
+     * 引擎里本来有 FakeDeadZombieState，但 B42 这个版本的 enter() 调了
+     * IsoGameCharacter.setVisible(boolean)，而该版本根本没有这个方法 → 走状态机必抛异常。
+     * 所以这里只做字段组合（引擎判断"假死"读的就是 fakeDead）：
+     *   装死：fakeDead + onFloor + 不可碰撞       起身：三项还原
+     */
+    @LuaMethod(name = "HZ_fakeDead", global = true)
+    public static boolean fakeDead(IsoZombie z, boolean on) {
+        if (z == null) return false;
+        try {
+            z.setFakeDead(on);
+            z.setOnFloor(on);
+            z.setCollidable(!on);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
      * modSpeedType（1~4）→ 引擎对应的速度构造函数。
      *   1 慢尸 doShambler / 2 快走尸 doFastShambler / 3 跑尸 doSprinter
      *   4 假跑尸 doFakeShambler(1)：慢尸身体 + speedType=1（判定仍是跑，看着慢）
