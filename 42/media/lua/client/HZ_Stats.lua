@@ -540,9 +540,6 @@ local function processEntry(z, s, nowH, dh)
     -- 饿死：营养见底只设一次装死，之后起不起身是引擎的事，我们不插手
     if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
         s.fakeDead = true
-        if HZ.releaseOrder and HZ._orders and HZ._orders[z] then
-            HZ.releaseOrder(z, HZ._orders[z], false)
-        end
         HZ.try("fakeDeadOn", function() HZ_fakeDead(z, true) end)
     end
 
