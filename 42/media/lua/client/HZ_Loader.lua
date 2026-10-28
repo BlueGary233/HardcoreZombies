@@ -100,6 +100,9 @@ function HZ.reloadMod()
     -- 重载前先结算所有正在吃的条目，否则 eatingSince 记到重载之后（跨整个间隔）
     if HZ.statsFlushAll then pcall(HZ.statsFlushAll) end
 
+    -- 热重载前现拉一次快照并写进 modData（纯内存），重载后就能原样读回来
+    if HZ.persistWrite then pcall(HZ.persistWrite) end
+
     -- 清尸体上的模组数据（进食进度）。必须在这里做：
     -- dofile HZ_Pile 会重建 piles，之后旧堆连同 foods 一起丢了，找不到尸体。
     if HZ.purgeBodies then pcall(HZ.purgeBodies) end
