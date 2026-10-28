@@ -537,32 +537,13 @@ local function processEntry(z, s, nowH, dh)
         s.stage = s.stage - 1
     end
 
-    -- 饿死：营养见底 → 装死（引擎 FakeDeadZombieState，玩家靠近才起身咬人）
-    --   0.01 以下触发；回到 0.5 以上才解除，中间留 hysteresis 防止来回切
-    if HZ_fakeDead then
-        if s.nutrition <= 0.01 and not s.fakeDead then
-            s.fakeDead = true
-            if HZ.releaseOrder and HZ._orders and HZ._orders[z] then
-                HZ.releaseOrder(z, HZ._orders[z], false)
-            end
-            HZ.try("fakeDeadOn", function() HZ_fakeDead(z, true) end)
-        elseif s.fakeDead then
-            -- 起身条件：营养回到 0.5 以上，或者玩家进入 2.5 格（装死等猎物上门）
-            local wake = (s.nutrition >= 0.5)
-            if not wake then
-                local p = getSpecificPlayer and getSpecificPlayer(0)
-                if p and not p:isDead() then
-                    HZ.try("fakeDeadSee", function()
-                        local dx, dy = z:getX() - p:getX(), z:getY() - p:getY()
-                        wake = (dx * dx + dy * dy) <= 6.25      -- 2.5 格
-                    end)
-                end
-            end
-            if wake then
-                s.fakeDead = false
-                HZ.try("fakeDeadOff", function() HZ_fakeDead(z, false) end)
-            end
+    -- 饿死：营养见底只设一次装死，之后起不起身是引擎的事，我们不插手
+    if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
+        s.fakeDead = true
+        if HZ.releaseOrder and HZ._orders and HZ._orders[z] then
+            HZ.releaseOrder(z, HZ._orders[z], false)
         end
+        HZ.try("fakeDeadOn", function() HZ_fakeDead(z, true) end)
     end
 
     -- 档位 = 速度维反推（sp 1→4 假跑尸 / 2→3 跑尸 / 3→2 快走 / 4→1 慢尸）

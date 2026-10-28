@@ -23,8 +23,9 @@ local function orderFlags(z, body)
     local dead      = st % 2 >= 1
     local hasTgt    = math.floor(st / 2) % 2 >= 1 or math.floor(st / 4) % 2 >= 1
     local bodyAlive = math.floor(st / 8) % 2 >= 1
+    local fakeDead  = math.floor(st / 16) % 2 >= 1     -- 装死中：不导航、不推
     if bodyAlive and body and HZ.isBone(body) then bodyAlive = false end
-    return dead, hasTgt, bodyAlive
+    return dead, hasTgt, bodyAlive, fakeDead
 end
 
 -- 瞬时动作状态：这些状态里踢 setDefaultState 会打断引擎动作（翻窗卡住、倒地不起、砸窗中断）。
@@ -1015,7 +1016,11 @@ function HZ.tickOrder(z, ord, now)
     -- ① 校验：死了 / 堆没了 / 目标尸体不可用
     -- 一次跨桥同时拿到三件事：丧尸已死 / 挂着进食目标 / 尸体还在。
     -- 旧写法在上面调一次 HZ_orderState、下面 orderFlags 里又调一次，等于每拍两次 JNI。
-    local dead, hasTgt, bodyAlive = orderFlags(z, ord.body)
+    local dead, hasTgt, bodyAlive, fakeDead = orderFlags(z, ord.body)
+    if fakeDead then
+        HZ.releaseOrder(z, ord, false)
+        return
+    end
     if dead or not ord.pile or ord.pile.dead then
         -- 和 releaseOrder 的数据语义一致（0.3.0 也是走 releaseOrder）：
         -- 尸体名额 -1、三张表摘干净。区别是不对可能已销毁的对象调引擎方法。

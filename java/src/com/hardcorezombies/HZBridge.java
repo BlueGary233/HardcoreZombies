@@ -106,6 +106,8 @@ public class HZBridge {
         try { if (z.getEatBodyTarget() != null) s |= 2; } catch (Throwable ignored) { }
         try { if (z.bodyToEat != null) s |= 4; } catch (Throwable ignored) { }
         try { if (body != null && body.getSquare() != null) s |= 8; } catch (Throwable ignored) { }
+        try { if (z.isFakeDead()) s |= 16; } catch (Throwable ignored) { }   // 装死中
+
         return s;
     }
 
