@@ -591,9 +591,9 @@ local function processEntry(z, s, nowH, dh)
     -- 装死：每轮只装一次，两端都能触发
     --   见底（≤0.01）→ 饿殍装死
     --   吃满（≥5.00）→ 满营养装死，玩家靠近时复活成满档丧尸（跳脸）
-    -- 重新武装条件：营养落在中间带（0.5 ~ 4.5），也就是"既没饿死也没吃满"
+    -- 重新武装条件：营养落在中间带（0.5 ~ 4.75），也就是"既没饿死也没吃满"
     if s.canFakeDead == nil then s.canFakeDead = true end    -- 新条目默认有一次机会
-    if s.nutrition > 0.5 and s.nutrition < 4.5 then s.canFakeDead = true end
+    if s.nutrition > 0.5 and s.nutrition < 4.75 then s.canFakeDead = true end
 
     local starved = (s.nutrition <= 0.01)
     local stuffed = (s.nutrition >= MAX_NUT)
