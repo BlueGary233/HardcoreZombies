@@ -19,7 +19,8 @@ local MAX_NUT = 5
 local MAX_TIER = 4       -- modSpeedType：1 慢尸 / 2 快走尸 / 3 跑尸 / 4 假跑尸
 local NUT_STEP = 0.25
 local NUT_LO, NUT_HI = 0.25, 4.75
-local STAGES = 18
+local STAGES = 18                  -- 五维可长 18 格
+local STAGES_MAX = 19               -- 档位 0..19（0.25 起算 1 档，4.75 = 19 档）
 
 local H_BASE, H_MAX = 0.5, 4.0
 local S_MIN,  S_MAX  = 1, 4      -- 速度 4 档：1 假跑尸 / 2 跑尸 / 3 快走 / 4 慢尸（数越小越快）
@@ -221,18 +222,21 @@ local function stageOf(target)
     return s
 end
 
--- 升档用：只要高于当前档位就算进下一档（0.25+ε → 1 档，0.50+ε → 2 档 …）
--- 和 snap()（向下取整，用于初始化/校准）是两套口径，别混用。
-local function stageCeil(x)
-    local n = (x - NUT_LO) / NUT_STEP
-    local v = math.ceil(n - 1e-9)          -- 正好落在网格点上时不额外加一档
-    if v < 0 then return 0 end
-    if v > STAGES then return STAGES end
+-- 档位：均匀分布，档位 = floor(营养 / 0.25)
+--   0.24 → 0    0.25 → 1    0.26 → 1    0.50 → 2  …  4.75 → 19
+local function stageOfNut(x)
+    local v = math.floor((tonumber(x) or 0) / NUT_STEP)
+    if v < 0 then v = 0 end
+    if v > STAGES_MAX then v = STAGES_MAX end
     return v
 end
 
-local function snapUp(x)
-    return NUT_LO + stageCeil(x) * NUT_STEP
+-- 身体（五维）要跟到的营养格：档位 × 0.25，夹在 [NUT_LO, NUT_HI]
+local function snapStage(x)
+    local t = stageOfNut(x) * NUT_STEP
+    if t < NUT_LO then t = NUT_LO end
+    if t > NUT_HI then t = NUT_HI end
+    return t
 end
 
 -- 校准用：向下对齐到 0.25 网格，避免血量浮点让营养卡在阈值边界抖动
@@ -438,7 +442,7 @@ local function getEntry(z)
         uid         = uid,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageCeil(base),  -- 仅供 HUD 显示（升档口径）
+        stage       = stageOfNut(base), -- 仅供 HUD 显示
         lastHours   = nil,
         five        = snapshot(z),
         x           = (function() local ok,v = pcall(function() return z:getX() end); return ok and v or 0 end)(),
@@ -567,7 +571,7 @@ local function processEntry(z, s, nowH, dh)
 
     -- 显示营养（吃/饿推动，0.25 网格）vs 实际营养（f 五维）：不相等就随机增减一维，
     -- 每拍最多 4 格（每格 = 一次 applyStats，内部要线性扫 uid）。
-    local shown = snapUp(s.nutrition)     -- 升档口径：nut 一超过下限就要求身体跟上
+    local shown = snapStage(s.nutrition)  -- 档位×0.25：0.26 与 0.25 同档，0.5 进一档
     local adj = 0
     while adj < 4 do
         local actual = nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he)
@@ -580,7 +584,7 @@ local function processEntry(z, s, nowH, dh)
         end
         adj = adj + 1
     end
-    s.stage = stageCeil(s.nutrition)    -- 仅供 HUD 显示（升档口径）
+    s.stage = stageOfNut(s.nutrition)   -- 仅供 HUD 显示（0.25 起算 1 档）
 
     -- 饿死：营养见底只设一次装死（走引擎生成器那套：低血 + 躺姿 + fakeDead），之后全交给引擎
     if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
@@ -698,7 +702,7 @@ function HZ.statsTrackByDiff(z, packed)
         obj         = z,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageCeil(base),  -- 仅供 HUD 显示（升档口径）
+        stage       = stageOfNut(base), -- 仅供 HUD 显示
         lastHours   = nil,          -- 第一次轮到只校准、不打分
         five        = { h = hN, sp = spN, st = stN, si = siN, he = heN },
         x           = 0,            -- 坐标不随 diff 传；小时校准/调试时现取
