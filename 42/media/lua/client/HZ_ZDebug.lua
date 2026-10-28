@@ -287,7 +287,11 @@ local function onMinute()
 end
 
 HZ_DBG_EVENT = onMinute
-Events.EveryOneMinute.Add(HZ_DBG_EVENT)
+-- 本文件在热重载列表里，会被反复执行；不加锁的话每分钟会多跑一个 handler
+if not HZ._dbgHooked then
+    HZ._dbgHooked = true
+    Events.EveryOneMinute.Add(HZ_DBG_EVENT)
+end
 
 -- 控制台手动触发：HZ.debugSnapshot()
 function HZ.debugSnapshot()
