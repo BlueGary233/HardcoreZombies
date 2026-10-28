@@ -357,6 +357,34 @@ function HZ.setModTier(z, tier)
     return ok
 end
 
+-- 持久化恢复：把存档里的记录写进这只丧尸的条目（读档首帧匹配时调用一次）
+function HZ.statsRestore(z, rec, packed)
+    if not z or not rec then return false end
+    local s = HZ._zstats and HZ._zstats[z]
+    if not s and HZ.statsTrackByDiff and packed then s = HZ.statsTrackByDiff(z, packed) end
+    if not s then return false end
+
+    s.nutrition = clampv(rec.nut, 0, MAX_NUT, s.nutrition)
+    s.satiety   = clampv(rec.sat, 0, MAX_SAT, s.satiety)
+    s.five.h    = clampv(rec.h,  H_BASE, H_MAX, s.five.h)
+    s.five.sp   = clampv(rec.sp, S_MIN,  S_MAX, s.five.sp)
+    s.five.st   = clampv(rec.st, T_MIN,  T_MAX, s.five.st)
+    s.five.si   = clampv(rec.si, V_MIN,  V_MAX, s.five.si)
+    s.five.he   = clampv(rec.he, E_MIN,  E_MAX, s.five.he)
+    s.stage     = stageOf(s.nutrition)
+    -- 记成"我方写入"，避免下一小时校准把它当外部改动
+    s.expectedFive = { h = s.five.h, sp = s.five.sp, st = s.five.st,
+                       si = s.five.si, he = s.five.he }
+
+    if HZ_applyStats then
+        pcall(HZ_applyStats, z, s.five.h, s.five.st, s.five.si, s.five.he)
+    end
+    local wantTier = 5 - s.five.sp
+    if wantTier < 1 then wantTier = 1 elseif wantTier > MAX_TIER then wantTier = MAX_TIER end
+    HZ.setModTier(z, wantTier)
+    return true
+end
+
 -- ===================== 条目（僵尸对象作 key） =====================
 -- 对象就是指针，拿它当 key；对象失效（getUID 拿不到）即出表。
 
