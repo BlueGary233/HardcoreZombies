@@ -385,20 +385,20 @@ public class HZBridge {
     }
 
     /**
-     * 装死 / 起身。
-     *
-     * 引擎里本来有 FakeDeadZombieState，但 B42 这个版本的 enter() 调了
-     * IsoGameCharacter.setVisible(boolean)，而该版本根本没有这个方法 → 走状态机必抛异常。
-     * 所以这里只做字段组合（引擎判断"假死"读的就是 fakeDead）：
-     *   装死：fakeDead + onFloor + 不可碰撞       起身：三项还原
+     * 装死：照抄引擎生成器 ZombiePopulationManager.addZombieStanding() 对假死丧尸做的三件事
+     *   ① setHealth(0.5 + Rand.Next(0.3))   低血（所以很快会死成尸体，才有死亡惨叫/进尸堆）
+     *   ② sprite = legsSprite               躺姿
+     *   ③ setFakeDead(true)                 标记；死亡时 IsoDeadBody 构造器会把它复制到尸体上
+     * 之后全交给引擎：IsoDeadBody.updateBodies() → updateFakeDead()（死亡 0.5 小时后、玩家靠近）
+     * → reanimateNow() 复活。
      */
     @LuaMethod(name = "HZ_fakeDead", global = true)
-    public static boolean fakeDead(IsoZombie z, boolean on) {
-        if (z == null) return false;
+    public static boolean fakeDead(IsoZombie z) {
+        if (z == null || z.isDead()) return false;
         try {
-            z.setFakeDead(on);
-            z.setOnFloor(on);
-            z.setCollidable(!on);
+            z.setHealth(0.5f + zombie.core.random.Rand.Next(0.3f));
+            if (z.legsSprite != null && z.sprite != z.legsSprite) z.sprite = z.legsSprite;
+            z.setFakeDead(true);
             return true;
         } catch (Throwable t) {
             return false;

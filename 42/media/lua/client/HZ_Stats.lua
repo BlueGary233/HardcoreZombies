@@ -537,10 +537,10 @@ local function processEntry(z, s, nowH, dh)
         s.stage = s.stage - 1
     end
 
-    -- 饿死：营养见底只设一次装死，之后起不起身是引擎的事，我们不插手
+    -- 饿死：营养见底只设一次装死（走引擎生成器那套：低血 + 躺姿 + fakeDead），之后全交给引擎
     if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
         s.fakeDead = true
-        HZ.try("fakeDeadOn", function() HZ_fakeDead(z, true) end)
+        HZ.try("fakeDeadOn", function() HZ_fakeDead(z) end)
     end
 
     -- 档位 = 速度维反推（sp 1→4 假跑尸 / 2→3 跑尸 / 3→2 快走 / 4→1 慢尸）
