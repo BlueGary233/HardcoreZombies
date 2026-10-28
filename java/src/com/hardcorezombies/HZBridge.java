@@ -370,7 +370,8 @@ public class HZBridge {
 
             try {
                 z.setHealth(hp);
-                z.speedType = sp;
+                // speedType 不再由五维写：速度归 modSpeedType（HZ_applyTier）管。
+                // 五维里的 sp 只是营养系统的数据，写进引擎会和档位打架。
                 z.strength  = st;
                 z.sight     = si;
                 z.hearing   = he;
@@ -380,6 +381,28 @@ public class HZBridge {
             }
         }
         return false;
+    }
+
+    /**
+     * modSpeedType（1~4）→ 引擎对应的速度构造函数。
+     *   1 慢尸 doShambler / 2 快走尸 doFastShambler / 3 跑尸 doSprinter
+     *   4 假跑尸 doFakeShambler(1)：慢尸身体 + speedType=1（判定仍是跑，看着慢）
+     * 只做赋值，不参与判定。
+     */
+    @LuaMethod(name = "HZ_applyTier", global = true)
+    public static boolean applyTier(IsoZombie z, int tier) {
+        if (z == null) return false;
+        try {
+            switch (tier) {
+                case 1: z.doShambler();      return true;
+                case 2: z.doFastShambler();  return true;
+                case 3: z.doSprinter();      return true;
+                case 4: z.doFakeShambler(1); return true;
+                default: return false;
+            }
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /**

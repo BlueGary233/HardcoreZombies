@@ -903,7 +903,7 @@ end
 -- 只留订单系统需要的入口（HZ.findBody 定义在上方）；其余 local function 仅供本文件内部使用
 
 
-print("[HZ] Java bridge: applySprint=" .. tostring(HZ_applySprint)
+print("[HZ] Java bridge: applyTier=" .. tostring(HZ_applyTier)
     .. " setBuff=" .. tostring(HZ_setBuff)
     .. " getBuff=" .. tostring(HZ_getBuff)
     .. " clearTarget=" .. tostring(HZ_clearTarget)

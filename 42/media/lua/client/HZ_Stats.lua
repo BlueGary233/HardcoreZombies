@@ -17,6 +17,7 @@ local HZ = HardcoreZombies
 local MAX_SAT = 5
 local MAX_NUT = 5
 local RUN_NUT = 4.5      -- 营养 >= 这个值 → 跑尸（满值 5.0，留一点余量）
+local MAX_TIER = 4       -- modSpeedType：1 慢尸 / 2 快走尸 / 3 跑尸 / 4 假跑尸
 local NUT_STEP = 0.25
 local NUT_LO, NUT_HI = 0.5, 4.75
 local STAGES = 17
@@ -324,13 +325,43 @@ local function snapshot(z)
 end
 
 -- 两组五维是否有任何一项不同
-local function changed(a, b)
+-- 校准只比这四维：速度维 sp 由 modSpeedType 派生，读回来是循环引用
+local function changedNoSpeed(a, b)
     if not a or not b then return true end
     return math.abs((a.h or 0)  - (b.h or 0))  > 0.01
-        or math.abs((a.sp or 0) - (b.sp or 0)) > 0.01
         or math.abs((a.st or 0) - (b.st or 0)) > 0.01
         or math.abs((a.si or 0) - (b.si or 0)) > 0.01
         or math.abs((a.he or 0) - (b.he or 0)) > 0.01
+end
+
+-- ===================== modSpeedType（4 档） =====================
+-- 引擎没有"假跑尸"标志位，但 (speedType, walkVariant) 能唯一反推：
+--   1 + ZombieWalk1 = 4 假跑尸     1 + ZombieWalk2 = 3 跑尸
+--   2 + ZombieWalk2 = 2 快走尸     3 + ZombieWalk1 = 1 慢尸
+local function readTier(z)
+    local st, wv
+    HZ.try("readTier", function() st = z:getSpeedType(); wv = z.walkVariant end)
+    st = tonumber(st)
+    if st == 1 then return (wv == "ZombieWalk1") and 4 or 3 end
+    if st == 2 then return 2 end
+    return 1
+end
+
+-- 档位和目标不符才调一次桥（桥内部会连带 speedMod / walkVariant / walkType / turnDelta）
+function HZ.setModTier(z, tier, s)
+    tier = tonumber(tier)
+    if not tier or tier < 1 or tier > MAX_TIER then return false end
+    if readTier(z) == tier then
+        if s then s.modTier = tier end
+        return true
+    end
+    local ok = false
+    if HZ_applyTier then ok = HZ.try("applyTier", function() return HZ_applyTier(z, tier) end) or false end
+    if s then s.modTier = tier end
+    if HZ.debugEnabled and HZ.debugEnabled() and HZ.due("tierLog", 3000) then
+        HZ.log(string.format("modSpeedType -> %d uid=%s ok=%s", tier, tostring(HZ.uidOf and HZ.uidOf(z)), tostring(ok)))
+    end
+    return ok
 end
 
 -- ===================== 条目（僵尸对象作 key） =====================
@@ -467,18 +498,19 @@ local function processEntry(z, s, nowH, dh)
                 s.y = tonumber(y) or s.y
 
                 if nf.h and nf.sp and nf.st and nf.si and nf.he then
-                    if changed(s.five, nf) then
-                        if s.expectedFive and not changed(s.expectedFive, nf) then
+                    -- 速度维不参与校准：引擎的 speedType 现在由 modSpeedType 派生，读回来是循环引用
+                    if changedNoSpeed(s.five, nf) then
+                        if s.expectedFive and not changedNoSpeed(s.expectedFive, nf) then
                             -- 五维变化 = 营养系统自己跨阈值改的：不算受伤
                             s.expectedFive = nil
                             s.hurt = nil
                         else
                             -- 外部来源（玩家打伤 / 脚本 / 引擎）：受伤 buff + 校准营养
                             s.hurt = true
-                            s.nutrition = snap(nutritionFromFive(nf.h, nf.sp, nf.st, nf.si, nf.he))
+                            s.nutrition = snap(nutritionFromFive(nf.h, s.five.sp or nf.sp, nf.st, nf.si, nf.he))
                             s.stage = stageOf(s.nutrition)
                         end
-                        s.five = nf
+                        s.five.h, s.five.st, s.five.si, s.five.he = nf.h, nf.st, nf.si, nf.he
                     else
                         s.hurt = nil        -- 一整个校准周期没变化：受伤状态解除
                     end
@@ -509,27 +541,16 @@ local function processEntry(z, s, nowH, dh)
         s.stage = s.stage - 1
     end
 
-    -- 营养满值 → 跑尸：直接写速度字段，不等引擎那套随机掷骰
+    -- 档位维护：满营养 → 3 档（跑尸）；不够满 → 按速度维反推（sp 1→3、2→2、3→1）。
+    -- 4 档（假跑尸）不由营养推：原版生成时就带假跑尸，营养掉下来才会被拉低。
+    local want
     if s.nutrition >= RUN_NUT then
-        if HZ_applySprint then
-            pcall(HZ_applySprint, z)
-            if HZ.debugEnabled() and HZ.due("sprintLog", 10000) then
-                -- 写完立刻读回来，确认是写入失败还是被引擎覆盖
-                local sp, mod, anim, hasDef
-                HZ.try("sprintCheck", function()
-                    sp  = z:getSpeedType()
-                    mod = z:getSpeedMod()
-                    hasDef = z.def ~= nil
-                    if z.def then anim = z.def.animFrameIncrease end
-                end)
-                HZ.log(string.format("sprint nut=%.2f uid=%s -> sp=%s mod=%s anim=%s def=%s",
-                    s.nutrition, tostring(s.uid), tostring(sp), tostring(mod),
-                    tostring(anim), tostring(hasDef)))
-            end
-        elseif HZ.debugEnabled() and HZ.due("sprintNil", 60000) then
-            HZ.log("sprint: HZ_applySprint 不存在（jar 没加载，需要重启游戏）")
-        end
+        want = 3
+    else
+        want = 4 - (s.five and s.five.sp or S_MAX)
+        if want < 1 then want = 1 elseif want > 3 then want = 3 end
     end
+    if readTier(z) ~= want then HZ.setModTier(z, want, s) end
 end
 
 -- 一轮维护 = 一个快照周期内把 N 只各过一遍
@@ -649,7 +670,7 @@ function HZ.statsTrackByDiff(z, packed)
 
     -- 建好条目立刻按当前条件写一次 buff（把重载/读档留下的旧值纠正过来）
     if HZ.refreshBuffs then HZ.refreshBuffs(z) end
-    if s.nutrition >= RUN_NUT and HZ_applySprint then pcall(HZ_applySprint, z) end
+    s.modTier = readTier(z)      -- 初始档位 = 引擎现状（原版假跑尸保持 4 档）
     return s
 end
 
