@@ -333,29 +333,18 @@ public class HZBridge {
 
     /** 按 uid 写回五维（跨阈值成长用）；找不到对象返回 false */
     @LuaMethod(name = "HZ_applyStats", global = true)
-    public static boolean applyStats(String uid, float hp, int st, int si, int he) {
-        if (uid == null) return false;
-        IsoCell cell = IsoWorld.instance == null ? null : IsoWorld.instance.getCell();
-        if (cell == null) return false;
-
-        for (IsoMovingObject o : cell.getObjectList()) {
-            if (!(o instanceof IsoZombie)) continue;
-            IsoZombie z = (IsoZombie) o;
-            if (!uid.equals(z.getUID())) continue;
-
-            try {
-                z.setHealth(hp);
-                // speedType 不再由五维写：速度归 modSpeedType（HZ_applyTier）管。
-                // 五维里的 sp 只是营养系统的数据，写进引擎会和档位打架。
-                z.strength  = st;
-                z.sight     = si;
-                z.hearing   = he;
-                return true;
-            } catch (Throwable t) {
-                return false;
-            }
+    public static boolean applyStats(IsoZombie z, float hp, int st, int si, int he) {
+        if (z == null) return false;
+        try {
+            z.setHealth(hp);
+            // speedType 由 modSpeedType（HZ_applyTier）管，这里不写
+            z.strength = st;
+            z.sight    = si;
+            z.hearing  = he;
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
-        return false;
     }
 
     /**

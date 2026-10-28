@@ -260,12 +260,12 @@ local function gapsDown(f)
 end
 
 -- 改数据 + 写回引擎
-local function applyFive(uid, f)
-    if HZ_applyStats then pcall(HZ_applyStats, uid, f.h, f.st, f.si, f.he) end
+local function applyFive(z, f)
+    if HZ_applyStats and z then pcall(HZ_applyStats, z, f.h, f.st, f.si, f.he) end
 end
 
 -- 单维上升一格并写回引擎
-local function stepUp(uid, f, dim)
+local function stepUp(z, f, dim)
     if dim == "h" then
         f.h = math.min(H_MAX, f.h + 0.5)
     elseif dim == "sp" then
@@ -277,11 +277,11 @@ local function stepUp(uid, f, dim)
     elseif dim == "he" then
         f.he = math.max(E_MIN, f.he - 1)
     end
-    applyFive(uid, f)
+    applyFive(z, f)
 end
 
 -- 单维下降一格并写回引擎
-local function stepDown(uid, f, dim)
+local function stepDown(z, f, dim)
     if dim == "h" then
         f.h = math.max(H_BASE, f.h - 0.5)
     elseif dim == "sp" then
@@ -293,7 +293,7 @@ local function stepDown(uid, f, dim)
     elseif dim == "he" then
         f.he = math.min(E_MAX, f.he + 1)
     end
-    applyFive(uid, f)
+    applyFive(z, f)
 end
 
 -- PZ 的 Kahlua 没有 math.random，用引擎的 Rand
@@ -307,13 +307,15 @@ local function randInt(n)
 end
 
 -- 阶段跨一次：随机挑一个有缺口的维度 +-1；全满返回 false
-local function adjustStats(uid, s, dir)
+local function adjustStats(s, dir)
     local g = (dir > 0) and gapsUp(s.five) or gapsDown(s.five)
     if #g == 0 then return false end
     local dim = g[randInt(#g)]
     if not dim then return false end
 
-    if dir > 0 then stepUp(uid, s.five, dim) else stepDown(uid, s.five, dim) end
+    local z = s.obj
+    if not z then return false end
+    if dir > 0 then stepUp(z, s.five, dim) else stepDown(z, s.five, dim) end
 
     -- 记下"营养系统期望的五维"，下次校准用它区分外部改动
     s.expectedFive = { h = s.five.h, sp = s.five.sp, st = s.five.st,
@@ -520,9 +522,9 @@ local function processEntry(z, s, nowH, dh)
     while adj < 4 do
         local actual = nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he)
         if actual < shown - 0.001 then
-            if not adjustStats(s.uid, s, 1) then break end
+            if not adjustStats(s, 1) then break end
         elseif actual > shown + 0.001 then
-            if not adjustStats(s.uid, s, -1) then break end
+            if not adjustStats(s, -1) then break end
         else
             break
         end
