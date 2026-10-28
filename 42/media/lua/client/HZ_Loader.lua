@@ -106,7 +106,7 @@ function HZ.reloadMod()
 
     -- reloadLuaFile 的基准目录是 Zomboid/mods/，必须带完整相对路径
     local base = "HardcoreZombies/42/media/lua/client/"
-    local files = { "HZ_Base.lua", "HZ_Pile.lua", "HZ_Orders.lua", "HZ_Stats.lua", "HZ_Sound.lua", "HZ_Diff.lua", "HZ_ZDebug.lua" }
+    local files = { "HZ_Base.lua", "HZ_Pile.lua", "HZ_Orders.lua", "HZ_Stats.lua", "HZ_Sound.lua", "HZ_Diff.lua", "HZ_Persist.lua", "HZ_ZDebug.lua" }
 
     for i = 1, #files do
         local ok, err = pcall(reloadLuaFile, base .. files[i])

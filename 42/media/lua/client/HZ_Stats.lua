@@ -379,9 +379,7 @@ function HZ.statsRestore(z, rec, packed)
     if HZ_applyStats then
         pcall(HZ_applyStats, z, s.five.h, s.five.st, s.five.si, s.five.he)
     end
-    local wantTier = 5 - s.five.sp
-    if wantTier < 1 then wantTier = 1 elseif wantTier > MAX_TIER then wantTier = MAX_TIER end
-    HZ.setModTier(z, wantTier)
+    -- 只恢复五维和双值；档位/装死/订单等一概不碰，交给正常维护下一拍自己收敛
     return true
 end
 

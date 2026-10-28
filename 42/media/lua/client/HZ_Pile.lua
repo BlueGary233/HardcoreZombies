@@ -763,6 +763,11 @@ end
 local scanState = nil
 local SCAN_BUDGET = 256          -- 每帧最多处理多少格
 
+-- 扫全图是否已经完成（持久化恢复要等它）
+function HZ.initialScanDone()
+    return initialScanned == true
+end
+
 function HZ.initialScan(player)
     if initialScanned then return end
     if not player then return end

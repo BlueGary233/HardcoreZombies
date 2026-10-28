@@ -71,6 +71,9 @@ function HZ.persistRestore()
         return
     end
 
+    -- 时机固定：等第一次扫全图（尸体扫描）完成后再恢复，避免和初始扫描抢对象
+    if HZ.initialScanDone and not HZ.initialScanDone() then return end
+
     local snap = HZ._snap
     if not snap or (snap.n or 0) == 0 then return end   -- 快照还没来，下一拍再试
 
@@ -111,14 +114,18 @@ function HZ.persistRestore()
     HZ.log(string.format("persist: restored %d / %d (miss %d, r=%.1f)",
         matched, #saved.list, missed, MATCH_R))
 
-    -- 恢复完就把存档里的副本清掉：下次 OnSave 会写新的，不留旧数据当垃圾
-    md[KEY] = nil
+    -- 副本保留：热重载（Lua 重跑）后 _restored 清空，会再恢复一次，
+    -- 正好可以验证"热重载时状态是否留存"。下次 OnSave 会覆盖它。
 end
 
 -- 退出游戏存档时写入（单机唯一的存档时机）
-Events.OnSave.Add(function()
-    local ok, err = pcall(HZ.persistWrite)
-    if not ok then HZ.log("persist: write failed: " .. tostring(err)) end
-end)
+-- 热重载会重新执行本文件，用标志防止重复挂钩
+if not HZ._persistHooked then
+    HZ._persistHooked = true
+    Events.OnSave.Add(function()
+        local ok, err = pcall(HZ.persistWrite)
+        if not ok then HZ.log("persist: write failed: " .. tostring(err)) end
+    end)
+end
 
 print("[HZ_Persist] loaded")
