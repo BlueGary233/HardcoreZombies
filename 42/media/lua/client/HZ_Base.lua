@@ -232,8 +232,13 @@ function HZ.clearRuntimeState()
     HZ._throttle       = {}       -- 所有 due 时间戳，重载后重新起拍
     HZ._statDirty      = true
 
-    -- Java 侧帧快照的上一批引用
-    if HZ_resetDiff then pcall(HZ_resetDiff) end
+    -- Java 侧帧快照的上一批引用 + Lua 侧的 _snap/_restored
+    -- 注意：HZ.resetDiff（Lua）内部会再调 HZ_resetDiff（Java），所以优先走 Lua 版
+    if HZ.resetDiff then
+        pcall(HZ.resetDiff)
+    elseif HZ_resetDiff then
+        pcall(HZ_resetDiff)
+    end
 
     -- 重载 = 模组重新开始：把丧尸身上的状态清空，一切从零重建。
     -- 不清的话，Lua 表已经重置、modData 还留着 QUEUED|MUTE，
