@@ -381,13 +381,12 @@ local function getEntry(z)
     HZ._byUid  = HZ._byUid  or {}
 
     local sat0, nutK = initValues()
-    local raw  = actualNutrition(z)                -- f(五维)，未乘衰减系数
-    local base = snap(raw * nutK)                  -- 乘衰减系数 = 实际营养
+    local base = snap(actualNutrition(z) * nutK)   -- 实际营养 × 衰减系数 = 显示营养
     s = {
         uid         = uid,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageOf(raw),     -- 档位按身体算：随后 processEntry 用随机增减把五维对齐到营养档
+        stage       = stageOf(base),    -- 仅供 HUD 显示
         lastHours   = nil,
         five        = snapshot(z),
         x           = (function() local ok,v = pcall(function() return z:getX() end); return ok and v or 0 end)(),
@@ -514,29 +513,22 @@ local function processEntry(z, s, nowH, dh)
     -- 听力：统一入口。状态 = 在队列(认领中) 或 饱食 > 2，条件不变就不写桥
     if HZ.refreshBuffs then HZ.refreshBuffs(z) end
 
-    -- 跨阈值 -> 随机调五维。每拍最多 4 格：调一格 = 一次 applyStats（内部要线性找 uid），
-    -- 新进档的丧尸一上来可能差十几档，一次全打会很贵。
-    local want = stageOf(s.nutrition)
-    local step = 0
-    while s.stage < want and step < 4 do
-        if not adjustStats(s.uid, s, 1) then
-            s.nutrition = snap(nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he))
-            s.stage = stageOf(s.nutrition)
+    -- 显示营养（吃/饿推动，0.25 网格）vs 实际营养（f 五维）：不相等就随机增减一维，
+    -- 每拍最多 4 格（每格 = 一次 applyStats，内部要线性扫 uid）。
+    local shown = snap(s.nutrition)
+    local adj = 0
+    while adj < 4 do
+        local actual = nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he)
+        if actual < shown - 0.001 then
+            if not adjustStats(s.uid, s, 1) then break end
+        elseif actual > shown + 0.001 then
+            if not adjustStats(s.uid, s, -1) then break end
+        else
             break
         end
-        s.stage = s.stage + 1
-        step = step + 1
+        adj = adj + 1
     end
-    step = 0
-    while s.stage > want and step < 4 do
-        if not adjustStats(s.uid, s, -1) then
-            s.nutrition = snap(nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he))
-            s.stage = stageOf(s.nutrition)
-            break
-        end
-        s.stage = s.stage - 1
-        step = step + 1
-    end
+    s.stage = stageOf(s.nutrition)      -- 仅供 HUD 显示
 
     -- 饿死：营养见底只设一次装死（走引擎生成器那套：低血 + 躺姿 + fakeDead），之后全交给引擎
     if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
@@ -646,15 +638,14 @@ function HZ.statsTrackByDiff(z, packed)
     local heN = clampv(tonumber(he), E_MIN,  E_MAX, E_MAX)
 
     local sat0, nutK = initValues()
-    local raw  = nutritionFromFive(hN, spN, stN, siN, heN)
-    local base = snap(raw * nutK)
+    local base = snap(nutritionFromFive(hN, spN, stN, siN, heN) * nutK)
 
     s = {
         uid         = uid,
         obj         = z,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageOf(raw),     -- 档位按身体算：随后 processEntry 用随机增减把五维对齐到营养档
+        stage       = stageOf(base),    -- 仅供 HUD 显示
         lastHours   = nil,          -- 第一次轮到只校准、不打分
         five        = { h = hN, sp = spN, st = stN, si = siN, he = heN },
         x           = 0,            -- 坐标不随 diff 传；小时校准/调试时现取
