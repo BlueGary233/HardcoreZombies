@@ -20,7 +20,6 @@ local MAX_TIER = 4       -- modSpeedType：1 慢尸 / 2 快走尸 / 3 跑尸 / 4
 local NUT_STEP = 0.25
 local NUT_LO, NUT_HI = 0.25, 4.75
 local STAGES = 18                  -- 五维可长 18 格
-local STAGES_MAX = 19               -- 档位 1..19（19 档 = 18 格长满，4.75）
 
 local H_BASE, H_MAX = 0.5, 4.0
 local S_MIN,  S_MAX  = 1, 4      -- 速度 4 档：1 假跑尸 / 2 跑尸 / 3 快走 / 4 慢尸（数越小越快）
@@ -222,19 +221,22 @@ local function stageOf(target)
     return s
 end
 
--- 档位：均匀分布，档位 = floor(营养 / 0.25)，营养 ≥ 0.25 即为 1 档
---   1 档 = 五维 0 格(0.25)  2 档 = 1 格(0.50) … 19 档 = 18 格(4.75)
+-- 档位 = 五维已长的格数（0 ~ 18）。
+--   档 0 = 0 格，营养 [0.25, 0.50)
+--   档 1 = 1 格，营养 [0.50, 0.75)
+--   …
+--   档 18 = 18 格，营养 [4.75, 5.00]
+-- 推导：营养 = 0.25 + 0.25 × 格数  →  格数 = 营养/0.25 - 1
 local function stageOfNut(x)
-    local v = math.floor((tonumber(x) or 0) / NUT_STEP)
+    local v = math.floor((tonumber(x) or 0) / NUT_STEP) - 1
     if v < 0 then v = 0 end
-    if v > STAGES_MAX then v = STAGES_MAX end
+    if v > STAGES then v = STAGES end
     return v
 end
 
--- 身体（五维）要跟到的营养格 = 档位 × 0.25，夹在 [NUT_LO, NUT_HI]
+-- 身体（五维）要跟到的营养格 = 0.25 + 档位 × 0.25
 local function snapStage(x)
-    local t = stageOfNut(x) * NUT_STEP
-    if t < NUT_LO then t = NUT_LO end
+    local t = NUT_LO + stageOfNut(x) * NUT_STEP
     if t > NUT_HI then t = NUT_HI end
     return t
 end
