@@ -221,20 +221,6 @@ local function stageOf(target)
     return s
 end
 
--- 升档用：只要高于当前档位就算进下一档（0.25+ε → 1 档，0.50+ε → 2 档 …）
--- 和 snap()（向下取整，用于初始化/校准）是两套口径，别混用。
-local function stageCeil(x)
-    local n = (x - NUT_LO) / NUT_STEP
-    local v = math.ceil(n - 1e-9)          -- 正好落在网格点上时不额外加一档
-    if v < 0 then return 0 end
-    if v > STAGES then return STAGES end
-    return v
-end
-
-local function snapUp(x)
-    return NUT_LO + stageCeil(x) * NUT_STEP
-end
-
 -- 校准用：向下对齐到 0.25 网格，避免血量浮点让营养卡在阈值边界抖动
 local function snap(f)
     return NUT_LO + stageOf(f) * NUT_STEP
@@ -438,7 +424,7 @@ local function getEntry(z)
         uid         = uid,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageCeil(base),  -- 仅供 HUD 显示（升档口径）
+        stage       = stageOf(base),    -- 仅供 HUD 显示
         lastHours   = nil,
         five        = snapshot(z),
         x           = (function() local ok,v = pcall(function() return z:getX() end); return ok and v or 0 end)(),
@@ -567,7 +553,7 @@ local function processEntry(z, s, nowH, dh)
 
     -- 显示营养（吃/饿推动，0.25 网格）vs 实际营养（f 五维）：不相等就随机增减一维，
     -- 每拍最多 4 格（每格 = 一次 applyStats，内部要线性扫 uid）。
-    local shown = snapUp(s.nutrition)     -- 升档口径：nut 一超过下限就要求身体跟上
+    local shown = snap(s.nutrition)
     local adj = 0
     while adj < 4 do
         local actual = nutritionFromFive(s.five.h, s.five.sp, s.five.st, s.five.si, s.five.he)
@@ -580,7 +566,7 @@ local function processEntry(z, s, nowH, dh)
         end
         adj = adj + 1
     end
-    s.stage = stageCeil(s.nutrition)    -- 仅供 HUD 显示（升档口径）
+    s.stage = stageOf(s.nutrition)      -- 仅供 HUD 显示
 
     -- 饿死：营养见底只设一次装死（走引擎生成器那套：低血 + 躺姿 + fakeDead），之后全交给引擎
     if HZ_fakeDead and s.nutrition <= 0.01 and not s.fakeDead then
@@ -698,7 +684,7 @@ function HZ.statsTrackByDiff(z, packed)
         obj         = z,
         nutrition   = base,
         satiety     = sat0,
-        stage       = stageCeil(base),  -- 仅供 HUD 显示（升档口径）
+        stage       = stageOf(base),    -- 仅供 HUD 显示
         lastHours   = nil,          -- 第一次轮到只校准、不打分
         five        = { h = hN, sp = spN, st = stN, si = siN, he = heN },
         x           = 0,            -- 坐标不随 diff 传；小时校准/调试时现取
