@@ -588,13 +588,22 @@ local function processEntry(z, s, nowH, dh)
     end
     s.stage = stageOfNut(s.nutrition)   -- 仅供 HUD 显示
 
-    -- 装死：每轮饥饿只装一次。重新武装的条件是"吃饱过"（营养 > 0.5），
-    -- 这样既能让复活的丧尸再次装死，又不会醒来后营养还见底就立刻又躺下。
+    -- 装死：每轮只装一次，两端都能触发
+    --   见底（≤0.01）→ 饿殍装死
+    --   吃满（≥5.00）→ 满营养装死，玩家靠近时复活成满档丧尸（跳脸）
+    -- 重新武装条件：营养落在中间带（0.5 ~ 4.5），也就是"既没饿死也没吃满"
     if s.canFakeDead == nil then s.canFakeDead = true end    -- 新条目默认有一次机会
-    if s.nutrition > 0.5 then s.canFakeDead = true end
-    if HZ_fakeDead and s.canFakeDead and s.nutrition <= 0.01 then
+    if s.nutrition > 0.5 and s.nutrition < 4.5 then s.canFakeDead = true end
+
+    local starved = (s.nutrition <= 0.01)
+    local stuffed = (s.nutrition >= MAX_NUT)
+    if HZ_fakeDead and s.canFakeDead and (starved or stuffed) then
         s.canFakeDead = false
         HZ.try("fakeDeadOn", function() HZ_fakeDead(z) end)
+        if HZ.log then
+            HZ.log(string.format("fake dead: %s uid=%s nut=%.2f",
+                stuffed and "stuffed" or "starved", tostring(s.uid), s.nutrition))
+        end
     end
 
     -- 档位 = 速度维反推（sp 1→4 假跑尸 / 2→3 跑尸 / 3→2 快走 / 4→1 慢尸）
