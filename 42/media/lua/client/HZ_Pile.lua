@@ -820,6 +820,12 @@ function HZ.initialScan(player)
             initialScanned = true
             scanState = nil
             if HZ.debugEnabled() then HZ.log("initial scan bodies=" .. st.n) end
+            -- 扫全图完成 = 持久化恢复的唯一时机（读档 / 热重载都走这里）。
+            -- 先现拉一次快照，保证匹配用的是当前坐标。
+            if HZ.pullSnapshot and HZ.persistRestore then
+                pcall(HZ.pullSnapshot)
+                pcall(HZ.persistRestore)
+            end
             break
         end
     end

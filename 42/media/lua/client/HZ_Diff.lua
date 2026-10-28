@@ -117,9 +117,6 @@ function HZ.diffTick()
     -- 营养表是 _zstats 自己，不依赖这一拍拿没拿到位置
     HZ.pullSnapshot()
 
-    -- 读档后第一次拿到快照 → 按位置把存档里的营养数据配回去（只跑一次）
-    if HZ.persistRestore then HZ.persistRestore() end
-
     if HZ.beginStatsPass then HZ.beginStatsPass() end
 end
 
