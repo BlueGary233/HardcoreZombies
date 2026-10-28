@@ -227,6 +227,8 @@ local function buildOptions()
     opts:addSlider("PendingRetryMs", "UI_HZ_PendingRetryMs", 500, 10000, 500, 2000, getText("UI_HZ_PendingRetryMs_tip"))
     opts:addSlider("PendingGiveupMs", "UI_HZ_PendingGiveupMs", 1000, 60000, 1000, 10000, getText("UI_HZ_PendingGiveupMs_tip"))
     opts:addTickBox("FakeDeadFood", "UI_HZ_FakeDeadFood", false, getText("UI_HZ_FakeDeadFood_tip"))
+    opts:addTickBox("FakeDeadStarved", "UI_HZ_FakeDeadStarved", true, getText("UI_HZ_FakeDeadStarved_tip"))
+    opts:addTickBox("FakeDeadStuffed", "UI_HZ_FakeDeadStuffed", true, getText("UI_HZ_FakeDeadStuffed_tip"))
     opts:addButton("ReloadMod", "UI_HZ_ReloadMod", "UI_HZ_ReloadMod_tip", HZ.reloadMod)
 
     HZ.try("load", function() PZAPI.ModOptions:load() end)

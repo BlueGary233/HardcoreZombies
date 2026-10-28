@@ -595,8 +595,8 @@ local function processEntry(z, s, nowH, dh)
     if s.canFakeDead == nil then s.canFakeDead = true end    -- 新条目默认有一次机会
     if s.nutrition > 0.5 and s.nutrition < 4.75 then s.canFakeDead = true end
 
-    local starved = (s.nutrition <= 0.01)
-    local stuffed = (s.nutrition >= MAX_NUT)
+    local starved = (s.nutrition <= 0.01) and (HZ.opt.FakeDeadStarved ~= false)
+    local stuffed = (s.nutrition >= MAX_NUT)  and (HZ.opt.FakeDeadStuffed ~= false)
     if HZ_fakeDead and s.canFakeDead and (starved or stuffed) then
         s.canFakeDead = false
         HZ.try("fakeDeadOn", function() HZ_fakeDead(z) end)
