@@ -1,7 +1,7 @@
-name=硬核丧尸
+name=HardcoreZombies
 id=HardcoreZombies
 author=BlueGary233
-description=丧尸会吃尸体，吃饱会变跑尸，饿了会变弱。
+description=Zombies eat corpses; well-fed ones turn into sprinters, starving ones weaken.
 versionMin=42.0.0
 modversion=0.6.0
 poster=poster.png
